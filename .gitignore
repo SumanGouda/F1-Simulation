@@ -1,0 +1,24 @@
+# --- Python Environment ---
+venv/
+.env
+__pycache__/
+*.py[cod]
+
+# --- FastF1 & Data Caches ---
+# These can get very large (hundreds of MBs)
+cache/
+f1_visualizer/cache/
+data/
+
+# --- IDE & Editor Specific ---
+.vscode/
+.idea/
+.cursor/
+
+# --- Notebooks & Analysis ---
+.ipynb_checkpoints/
+
+# --- Webpage (Desktop) ---
+node_modules/
+dist/
+.DS_Store
