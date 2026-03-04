@@ -13,22 +13,20 @@ SCREEN_TITLE = "F1 Track Visualizer"
 YEAR = 2023
 GP = "Monza"
 SESSION_TYPE = "R"
-DRIVER = "VER"
+# DRIVER = "VER"
 
 
 class F1Visualizer(arcade.Window):
     def __init__(self):
         super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE)
-
         arcade.set_background_color(arcade.color.BLACK)
 
-        self.current_index = 0
-        self.speed_array = None
-        self.car_position = None
-        self.track_points = None
+        self.current_index = {}
+        self.speed_array = {}
+        self.car_position = {}
+        self.track_points = [] 
         self.results = None
-        
-        self.current_speed_value = 0
+        self.current_speed_value = {}
 
         self.setup()
 
@@ -37,19 +35,23 @@ class F1Visualizer(arcade.Window):
         manager = SessionManager(YEAR, GP, SESSION_TYPE)
         self.results = manager.get_session_results()
 
-        lap = manager.get_driver_laps(DRIVER, fastest_lap=True)
-        if lap is None:
-            print("No lap found.")
+        first_driver = self.results.iloc[0]['Abbreviation']
+        session = manager.session  
+        driver_laps = session.laps.pick_driver(first_driver)
+
+        # Sort laps in order
+        driver_laps = driver_laps.sort_values("LapNumber")
+
+        if driver_laps.empty:
+            print("No laps found for first driver.")
             return
 
         # 2️⃣ Process telemetry-
-        processor = TelemetryProcessor(lap)
-
+        processor = TelemetryProcessor(driver_laps.iloc[0])
         x, y = processor.get_track_coordinates()
         x, y = clean_track_data(x, y)
         
-        self.speed_array = processor.get_speed_data()
-        
+        # self.speed_array = processor.get_speed_data()
         if x is None:
             print("No telemetry.")
             return
@@ -71,7 +73,6 @@ class F1Visualizer(arcade.Window):
             draw_height,
             rotation=rotation
         )
-
         # --- CENTER THE TRACK ---
         # 1. Find the current center of the track points
         track_center_x = (min(x) + max(x)) / 2
@@ -84,18 +85,29 @@ class F1Visualizer(arcade.Window):
         # 3. Apply the difference as an offset to every point
         x = x + (screen_center_x - track_center_x)
         y = y + (screen_center_y - track_center_y)
-        # ------------------------
 
         # Convert to list of (x, y) tuples for Arcade
         self.track_points = list(zip(x, y))
         
+        for _, row in self.results.iterrows():
+            abbr = row['Abbreviation']
+            driver_lap = manager.get_driver_laps(abbr, fastest_lap=True)
+            
+            if driver_lap is not None:
+                d_processor = TelemetryProcessor(driver_lap)
+
+                self.speed_array[abbr] = d_processor.get_speed_data()
+                self.current_index[abbr] = 0.0
+                self.car_position[abbr] = self.track_points[0]
+                self.current_speed_value[abbr] = 0
+        
     def on_draw(self):
         self.clear()
         
-        # 1. Draw the Leaderboard Tower on the left
+        # 1️⃣ Leaderboard
         self.draw_leaderboard()
         
-        # 2. Draw the Track
+        # 2️⃣ Track
         if self.track_points:
             arcade.draw_line_strip(
                 self.track_points,
@@ -103,93 +115,115 @@ class F1Visualizer(arcade.Window):
                 5
             )
             
-        # 3. Draw the Car and its Name Tag
-        if self.car_position:
+        # 3️⃣ All Cars
+        for abbr, position in self.car_position.items():
+
+            x, y = position
+
             arcade.draw_circle_filled(
-                self.car_position[0],
-                self.car_position[1],
+                x,
+                y,
                 6,
                 arcade.color.RED
             )
-            
-            # Draw the driver name
             arcade.draw_text(
-                DRIVER,
-                self.car_position[0] + 10, 
-                self.car_position[1] + 10, 
+                abbr,
+                x + 10,
+                y + 10,
                 arcade.color.WHITE,
                 10,
                 bold=True
             )
 
-        # 4. ADDED: Draw the Speedometer Card in the bottom right
-        self.draw_speedometer()
+        # # 4️⃣ Speedometer
+        # self.draw_speedometer()
     
     def on_update(self, delta_time):
-        if not self.track_points or self.speed_array is None:
+        if not self.track_points or not self.speed_array:
             return
 
-        # 1. Get the total number of points in the track
         max_points = len(self.track_points)
-        max_idx = min(max_points, len(self.speed_array)) - 1
 
-        # 2. Calculate movement based on current speed
-        # We cast current_index to int to look up the speed in your array
-        current_speed = self.speed_array[int(self.current_index) % len(self.speed_array)]
-        self.current_speed_value = current_speed
-        movement = current_speed * delta_time * 0.05
-        
-        # 3. Increment index and use MODULO to loop back to 0 automatically
-        self.current_index = (self.current_index + movement) % max_idx
+        # Loop through each driver
+        for abbr in self.speed_array:
 
-        # 4. Interpolation logic for smooth movement between points
-        base_index = int(self.current_index)
-        next_index = (base_index + 1) % max_points
+            speeds = self.speed_array[abbr]
+            index = self.current_index[abbr]
 
-        t = self.current_index - base_index
+            if len(speeds) == 0:
+                continue
 
-        x1, y1 = self.track_points[base_index]
-        x2, y2 = self.track_points[next_index]
+            # Get current speed
+            current_speed = speeds[int(index) % len(speeds)]
+            self.current_speed_value[abbr] = current_speed
 
-        interp_x = x1 + (x2 - x1) * t
-        interp_y = y1 + (y2 - y1) * t
+            # Movement calculation
+            movement = current_speed * delta_time * 0.05
 
-        self.car_position = (interp_x, interp_y)
+            max_idx = min(max_points, len(speeds)) - 1
+
+            # Update index with looping
+            index = (index + movement) % max_idx
+            self.current_index[abbr] = index
+
+            # Interpolation
+            base_index = int(index)
+            next_index = (base_index + 1) % max_points
+
+            t = index - base_index
+
+            x1, y1 = self.track_points[base_index]
+            x2, y2 = self.track_points[next_index]
+
+            interp_x = x1 + (x2 - x1) * t
+            interp_y = y1 + (y2 - y1) * t
+
+            self.car_position[abbr] = (interp_x, interp_y)
 
     def draw_leaderboard(self):
-        if self.results is None:
+        if not self.current_index:
             return
 
-        # 1. RGB Tuple is the only safe way to avoid hex function errors
         box_color = (54, 113, 198)
 
-        # Define Boundaries
-        center_x = 100
-        center_y = 100
-        width = 150
-        height = 50
+        start_x = 120
+        start_y = SCREEN_HEIGHT - 60
+        box_width = 180
+        box_height = 35
+        spacing = 45
 
-        # 2. FIXED: Use draw_lrbt_rectangle_filled 
-        # (Notice the order: Left, Right, Bottom, Top)
-        arcade.draw_lrbt_rectangle_filled(
-            center_x - (width / 2),   # Left
-            center_x + (width / 2),   # Right
-            center_y - (height / 2),  # Bottom
-            center_y + (height / 2),  # Top
-            box_color
+        # 🔥 SORT BY TRACK PROGRESS
+        sorted_drivers = sorted(
+            self.current_index.items(),
+            key=lambda item: item[1],
+            reverse=True
         )
 
-        # 3. Draw text centered
-        arcade.draw_text(
-            DRIVER, 
-            center_x, 
-            center_y, 
-            arcade.color.WHITE, 
-            font_size=14, 
-            anchor_x="center", 
-            anchor_y="center",
-            bold=True
-        )
+        for i, (abbr, _) in enumerate(sorted_drivers):
+
+            center_x = start_x
+            center_y = start_y - i * spacing
+
+            arcade.draw_lrbt_rectangle_filled(
+                center_x - (box_width / 2),
+                center_x + (box_width / 2),
+                center_y - (box_height / 2),
+                center_y + (box_height / 2),
+                box_color
+            )
+
+            speed = int(self.current_speed_value.get(abbr, 0))
+
+            arcade.draw_text(
+                f"{i+1}. {abbr}  {speed} km/h",
+                center_x,
+                center_y,
+                arcade.color.WHITE,
+                font_size=12,
+                anchor_x="center",
+                anchor_y="center",
+                bold=True
+            )
     
     def draw_speedometer(self):
         center_x = SCREEN_WIDTH - 100
