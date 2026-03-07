@@ -5,6 +5,8 @@ class SessionManager:
 
     def __init__(self, year, gp, session_type):
         self.session = None
+        self.year = year           
+        self.gp = gp
 
         try:
             self.session = fastf1.get_session(year, gp, session_type)

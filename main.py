@@ -1,271 +1,231 @@
 import arcade
-import fastf1
-
+import sqlite3
+import os
+import numpy as np
+import pandas as pd
+from core.data_exporter import DataExporter  
 from core.session_manager import SessionManager
 from core.telemetry_processor import TelemetryProcessor
-from core.track_utils import transform_track, clean_track_data
+from utils.helpers import prepare_track_layout, get_screen_coords
 
-
+# Layout Constants
 SCREEN_WIDTH = 1500
-SCREEN_HEIGHT = 800
-SCREEN_TITLE = "F1 Track Visualizer"
+SCREEN_HEIGHT = 900
+SCREEN_TITLE = "F1 Race Replay - Arcade Edition"
 
-YEAR = 2023
-GP = "Monza"
-SESSION_TYPE = "R"
-# DRIVER = "VER"
+# Configuration
+year = 2025
+GP_NAME = "bahrain"  
+DB_ROOT = f"database/race_{GP_NAME}"
 
+def hex_to_rgb(hex_str):
+    if not hex_str or not isinstance(hex_str, str): return (128, 128, 128)
+    hex_str = hex_str.lstrip('#')
+    return tuple(int(hex_str[i:i+2], 16) for i in (0, 2, 4))
 
-class F1Visualizer(arcade.Window):
+class F1ReplayWindow(arcade.Window):
     def __init__(self):
         super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE)
         arcade.set_background_color(arcade.color.BLACK)
 
-        self.current_index = {}
-        self.speed_array = {}
-        self.car_position = {}
-        self.track_points = [] 
-        self.results = None
-        self.current_speed_value = {}
-
+        # Game State
+        self.driver_metadata = {}  # Loaded from results.db
+        self.sorted_drivers = []   # For the leaderboard
+        self.track_points = []
+        self.session_time = 0.0    # The "Master Clock" for the replay
+        self.speed_multiplier = 2.0 
+        
+        # Telemetry Cache (to avoid opening DB every frame)
+        self.telemetry_cache = {} 
+        
         self.setup()
 
     def setup(self):
-        # 1️⃣ Load session
-        manager = SessionManager(YEAR, GP, SESSION_TYPE)
-        self.results = manager.get_session_results()
-
-        first_driver = self.results.iloc[0]['Abbreviation']
-        session = manager.session  
-        driver_laps = session.laps.pick_driver(first_driver)
-
-        # Sort laps in order
-        driver_laps = driver_laps.sort_values("LapNumber")
-
-        if driver_laps.empty:
-            print("No laps found for first driver.")
-            return
-
-        # 2️⃣ Process telemetry-
-        processor = TelemetryProcessor(driver_laps.iloc[0])
-        x, y = processor.get_track_coordinates()
-        x, y = clean_track_data(x, y)
+        self.manager = SessionManager(year=year, gp=GP_NAME.title(), session_type="R")
         
-        # self.speed_array = processor.get_speed_data()
-        if x is None:
-            print("No telemetry.")
-            return
+        # 2. Initialize Exporter and RESET the database for this session [cite: 2026-01-20]
+        self.exporter = DataExporter(self.manager)
+        # We export fresh data every time the script runs
+        self.exporter.export_all_drivers() 
 
-        # 3️⃣ Transform track
-        rotation = manager.get_circuit_rotation()
-
-        # Define the size of the drawing area (the 'card' inside the window)
-        # Higher padding = smaller track
-        padding = 300 
-        draw_width = SCREEN_WIDTH - padding
-        draw_height = SCREEN_HEIGHT - padding
-
-        # Transform and scale the raw data
-        x, y = transform_track(
-            x,
-            y,
-            draw_width,
-            draw_height,
-            rotation=rotation
-        )
-        # --- CENTER THE TRACK ---
-        # 1. Find the current center of the track points
-        track_center_x = (min(x) + max(x)) / 2
-        track_center_y = (min(y) + max(y)) / 2
-
-        # 2. Find the center of screen
-        screen_center_x = SCREEN_WIDTH / 2
-        screen_center_y = SCREEN_HEIGHT / 2
-
-        # 3. Apply the difference as an offset to every point
-        x = x + (screen_center_x - track_center_x)
-        y = y + (screen_center_y - track_center_y)
-
-        # Convert to list of (x, y) tuples for Arcade
-        self.track_points = list(zip(x, y))
+        # 3. Load Static Metadata (Results, Colors, Rotation)
+        results_df = self.manager.get_session_results()
+        if results_df is not None:
+            self.driver_metadata = results_df.set_index('Abbreviation').to_dict('index')
+            self.sorted_drivers = list(self.driver_metadata.keys())
         
-        for _, row in self.results.iterrows():
-            abbr = row['Abbreviation']
-            driver_lap = manager.get_driver_laps(abbr, fastest_lap=True)
+        self.rotation = self.manager.get_circuit_rotation() or 0
+
+        # 4. Build the "Track Map" (The Green Line)
+        # We use the fastest lap to get the most accurate racing line [cite: 2026-01-20]
+        fastest_lap = self.manager.get_session_fastest_lap()
+        if fastest_lap is not None:
+            tp_track = TelemetryProcessor(fastest_lap)
+            raw_x, raw_y = tp_track.get_track_coordinates()
+
+            if raw_x is not None and raw_y is not None:
+                layout = prepare_track_layout(
+                    raw_x, raw_y, 
+                    SCREEN_WIDTH, SCREEN_HEIGHT, 
+                    padding_left=320, # Room for the leaderboard cards [cite: 2026-02-20]
+                    rotation=self.rotation
+                )
+                (self.track_points, self.offset_x, self.offset_y, self.track_scale) = layout
+        else:
+            print("Error: Could not retrieve track coordinates for setup.")
             
-            if driver_lap is not None:
-                d_processor = TelemetryProcessor(driver_lap)
+        self.car_colors = {}
+        for abbr, info in self.driver_metadata.items():
+            self.car_colors[abbr] = hex_to_rgb(info.get('TeamColor', '#FFFFFF'))
 
-                self.speed_array[abbr] = d_processor.get_speed_data()
-                self.current_index[abbr] = 0.0
-                self.car_position[abbr] = self.track_points[0]
-                self.current_speed_value[abbr] = 0
+        # 6. Initialize Game Timing & State
+        self.session_time = 0.0      
+        self.speed_multiplier = 1.0  # Controls replay speed (e.g., 2.0 for 2x speed)
+        self.is_paused = False      
         
+        self.current_car_positions = {abbr: (0, 0) for abbr in self.driver_metadata.keys()}
+
+    def on_update(self, delta_time):
+        if self.is_paused:
+            return
+
+        self.session_time += delta_time * self.speed_multiplier
+        race_positions = []
+
+        for abbr in self.driver_metadata.keys():
+            db_path = os.path.join(DB_ROOT, f"{abbr}.db")
+            if not os.path.exists(db_path): continue
+
+            try:
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                
+                # We pull x, y for the dots, and distance/gap for the leaderboard
+                query = """
+                    SELECT x, y, total_distance, gap_ahead 
+                    FROM telemetry 
+                    WHERE session_time <= ? 
+                    ORDER BY session_time DESC 
+                    LIMIT 1
+                """
+                cursor.execute(query, (self.session_time,))
+                result = cursor.fetchone()
+                conn.close()
+
+                if result:
+                    # Update live position for on_draw
+                    self.current_car_positions[abbr] = (result[0], result[1])
+                    
+                    # Update metadata for the leaderboard cards
+                    self.driver_metadata[abbr]['total_distance'] = result[2]
+                    self.driver_metadata[abbr]['gap_ahead'] = result[3]
+                    
+                    # Track this for sorting
+                    race_positions.append((abbr, result[2]))
+                
+            except Exception as e:
+                print(f"Update error for {abbr}: {e}")
+
+        # Re-sort the leaderboard based on actual distance covered [cite: 2026-01-20]
+        if race_positions:
+            race_positions.sort(key=lambda x: x[1], reverse=True)
+            self.sorted_drivers = [d[0] for d in race_positions]
+            
     def on_draw(self):
         self.clear()
         
-        # 1️⃣ Leaderboard
+        # 1. Draw Track Layout (The "Circuit Line")
+        if self.track_points:
+            arcade.draw_line_strip(self.track_points, arcade.color.DARK_GREEN, 3)
+        
+        # 2. Draw Leaderboard (Left Side Cards) [cite: 2026-02-20]
         self.draw_leaderboard()
         
-        # 2️⃣ Track
-        if self.track_points:
-            arcade.draw_line_strip(
-                self.track_points,
-                arcade.color.GREEN,
-                5
-            )
-            
-        # 3️⃣ All Cars
-        for abbr, position in self.car_position.items():
-
-            x, y = position
-
-            arcade.draw_circle_filled(
-                x,
-                y,
-                6,
-                arcade.color.RED
-            )
-            arcade.draw_text(
-                abbr,
-                x + 10,
-                y + 10,
-                arcade.color.WHITE,
-                10,
-                bold=True
-            )
-
-        # # 4️⃣ Speedometer
-        # self.draw_speedometer()
-    
-    def on_update(self, delta_time):
-        if not self.track_points or not self.speed_array:
-            return
-
-        max_points = len(self.track_points)
-
-        # Loop through each driver
-        for abbr in self.speed_array:
-
-            speeds = self.speed_array[abbr]
-            index = self.current_index[abbr]
-
-            if len(speeds) == 0:
+        # 3. Draw Driver Circles (The "Cars")
+        # We loop through sorted_drivers so the order is consistent [cite: 2026-01-20]
+        for abbr in self.sorted_drivers:
+            # Get the raw meters we stored during on_update
+            pos = self.current_car_positions.get(abbr)
+            if not pos or pos == (0, 0):
                 continue
 
-            # Get current speed
-            current_speed = speeds[int(index) % len(speeds)]
-            self.current_speed_value[abbr] = current_speed
-
-            # Movement calculation
-            movement = current_speed * delta_time * 0.05
-
-            max_idx = min(max_points, len(speeds)) - 1
-
-            # Update index with looping
-            index = (index + movement) % max_idx
-            self.current_index[abbr] = index
-
-            # Interpolation
-            base_index = int(index)
-            next_index = (base_index + 1) % max_points
-
-            t = index - base_index
-
-            x1, y1 = self.track_points[base_index]
-            x2, y2 = self.track_points[next_index]
-
-            interp_x = x1 + (x2 - x1) * t
-            interp_y = y1 + (y2 - y1) * t
-
-            self.car_position[abbr] = (interp_x, interp_y)
-
-    def draw_leaderboard(self):
-        if not self.current_index:
-            return
-
-        box_color = (54, 113, 198)
-
-        start_x = 120
-        start_y = SCREEN_HEIGHT - 60
-        box_width = 180
-        box_height = 35
-        spacing = 45
-
-        # 🔥 SORT BY TRACK PROGRESS
-        sorted_drivers = sorted(
-            self.current_index.items(),
-            key=lambda item: item[1],
-            reverse=True
-        )
-
-        for i, (abbr, _) in enumerate(sorted_drivers):
-
-            center_x = start_x
-            center_y = start_y - i * spacing
-
-            arcade.draw_lrbt_rectangle_filled(
-                center_x - (box_width / 2),
-                center_x + (box_width / 2),
-                center_y - (box_height / 2),
-                center_y + (box_height / 2),
-                box_color
+            # Map raw meters to screen pixels using our setup offsets
+            fx, fy = get_screen_coords(
+                pos[0], pos[1],
+                self.rotation, self.track_scale, self.offset_x, self.offset_y
             )
 
-            speed = int(self.current_speed_value.get(abbr, 0))
-
+            # Use our pre-built color dictionary for speed
+            color = self.car_colors.get(abbr, arcade.color.GRAY)
+            
+            # Draw the circle and the Abbreviation label
+            arcade.draw_circle_filled(fx, fy, 8, color)
             arcade.draw_text(
-                f"{i+1}. {abbr}  {speed} km/h",
-                center_x,
-                center_y,
-                arcade.color.WHITE,
-                font_size=12,
-                anchor_x="center",
-                anchor_y="center",
-                bold=True
+                abbr, fx + 12, fy, 
+                arcade.color.WHITE, 10, bold=True, anchor_y="center"
             )
-    
-    def draw_speedometer(self):
-        center_x = SCREEN_WIDTH - 100
-        center_y = SCREEN_HEIGHT - 100
-        width = 150
-        height = 75
-        
-        arcade.draw_lrbt_rectangle_filled(
-            center_x - (width / 2),
-            center_x + (width / 2),
-            center_y - (height / 2),
-            center_y + (height / 2),
-            (30, 30, 30, 200)
-        )
-        
-        # Draw the speed text
-        arcade.draw_text(
-            f"Speed: {int(self.current_speed_value)}",
-            center_x,
-            center_y,
-            arcade.color.WHITE,
-            font_size=14,
-            anchor_x="center",
-            anchor_y="center",
-            bold=True   
-        )               
-        arcade.draw_text(   
-            "KM/H",
-            center_x,
-            center_y - 20,
-            arcade.color.GAINSBORO,
-            font_size=10,
-            anchor_x="center",
-            anchor_y="center",
-            bold=True
-        )        
-                    
+            
+    def draw_leaderboard(self):
+        # Card style UI settings [cite: 2025-12-16]
+        start_x, start_y = 130, SCREEN_HEIGHT - 50
+        box_width = 240
+        box_height = 28
+        spacing = 32
+
+        for i, abbr in enumerate(self.sorted_drivers):
+            meta = self.driver_metadata.get(abbr, {})
+            color = self.car_colors.get(abbr, arcade.color.GRAY)
+            curr_y = start_y - (i * spacing)
+            
+            # Draw the main Card (The Team Color background) [cite: 2026-02-20]
+            arcade.draw_rect_filled(
+                arcade.rect.XYWH(start_x, curr_y, box_width, box_height), 
+                color
+            )
+            
+            # Add a subtle dark overlay for the right-side text to improve readability
+            arcade.draw_rect_filled(
+                arcade.rect.XYWH(start_x + 60, curr_y, box_width / 2, box_height), 
+                (0, 0, 0, 80) # Semi-transparent black
+            )
+            
+            # Logic for the Gap Time (Gap is updated in on_update from DB)
+            gap = meta.get('gap_ahead', 0)
+            gap_text = "INTERVAL" if i == 0 else f"+{gap:.3f}s"
+            
+            # Draw Rank & Abbreviation
+            arcade.draw_text(
+                f"{i+1}  {abbr}", 
+                start_x - 110, curr_y, 
+                arcade.color.WHITE, 12, bold=True, anchor_y="center"
+            )
+            
+            # Draw Gap Time
+            arcade.draw_text(
+                gap_text, 
+                start_x + 110, curr_y, 
+                arcade.color.WHITE, 11, anchor_x="right", anchor_y="center"
+            )
+
 def main():
-    fastf1.Cache.enable_cache("cache")
-    window = F1Visualizer()
-    arcade.run()
+    window = None
+    try:
+        window = F1ReplayWindow()
+        arcade.run()
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+    finally:
+        # This block runs when the window is closed [cite: 2026-01-20]
+        if window is not None and hasattr(window, 'exporter'):
+            try:
+                print("Cleaning up database files before exit...")
+                window.exporter.cleanup()
+            except Exception as e:
+                print(f"An error occurred while cleaning up database files: {e}")
+        if window and hasattr(window, 'exporter'):
+            print("Cleaning up database files before exit...")
+            window.exporter.cleanup()
+
 
 if __name__ == "__main__":
     main()
-    

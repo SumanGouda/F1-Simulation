@@ -72,4 +72,72 @@ class TelemetryProcessor:
 
         return self.telemetry['RPM'].to_numpy()
     
+    def get_gear_data(self):
+        """
+        Return gear array.
+        """
+        if self.telemetry is None:
+            return None
+
+        return self.telemetry['nGear'].to_numpy()
+   
+    def get_drs_data(self):
+        """
+        Return DRS array.
+        """
+        if self.telemetry is None:
+            return None
+
+        return self.telemetry['DRS'].to_numpy()
     
+    def get_driver_ahead(self):
+        """
+        Returns a cleaned array of the driver ahead.
+        Logic: 
+        1. If both DriverAhead and DistanceToDriverAhead are missing -> NaN (Leading).
+        2. If only DriverAhead is missing -> Fill with previous known driver.
+        """
+        if self.telemetry is None:
+            return None
+
+        if 'DriverAhead' in self.telemetry.columns:
+            # Create a temporary series to work with
+            driver_ahead = self.telemetry['DriverAhead']
+            distance_ahead = self.telemetry['DistanceToDriverAhead'] if 'DistanceToDriverAhead' in self.telemetry.columns else None
+
+            # Logic: If both are missing, the driver is truly in "Clean Air"
+            if distance_ahead is not None:
+                is_leading = driver_ahead.isna() & distance_ahead.isna()
+                
+                driver_ahead = driver_ahead.ffill()
+                driver_ahead[is_leading] = np.nan
+
+            return driver_ahead.to_numpy()
+        
+        return None
+    
+    def get_distance_ahead(self):
+        """
+        Calculates the time gap to the driver ahead in seconds.
+        Formula: Distance (m) / (Speed (km/h) / 3.6)
+        Returns a NumPy array rounded to 3 decimal places.
+        """
+        if self.telemetry is None:
+            return None
+
+        if 'DistanceToDriverAhead' in self.telemetry.columns and 'Speed' in self.telemetry.columns:
+            # 1. Get raw distance (m) and speed (km/h)
+            dist_m = self.telemetry['DistanceToDriverAhead']
+            speed_kmh = self.telemetry['Speed']
+
+            # 2. Convert speed to m/s to match distance units
+            speed_ms = speed_kmh / 3.6
+
+            # 3. Calculate time gap
+            # We use .replace(0, np.nan) to avoid DivisionByZero errors if a car is stationary
+            time_gap = dist_m / speed_ms.replace(0, np.nan)
+
+            # 4. Round to 3 decimal places and return as NumPy
+            return np.round(time_gap.to_numpy(), 3)
+        
+        return None
