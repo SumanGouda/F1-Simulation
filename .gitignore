@@ -5,10 +5,15 @@ __pycache__/
 *.py[cod]
 
 # --- FastF1 & Data Caches ---
-# These can get very large (hundreds of MBs)
 cache/
 f1_visualizer/cache/
 data/
+
+# --- Databases (Telemetry Project) ---
+# We ignore these because they are generated dynamically [cite: 2026-03-07]
+database/
+*.db
+*.sqlite
 
 # --- IDE & Editor Specific ---
 .vscode/
@@ -22,3 +27,7 @@ data/
 node_modules/
 dist/
 .DS_Store
+
+# --- OS Specific ---
+Thumbs.db
+desktop.ini
