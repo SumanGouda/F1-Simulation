@@ -5,6 +5,7 @@ import time
 import os
 import numpy as np
 import pandas as pd
+from rendering.ui_renderer import draw_leaderboard, draw_lap_number, draw_corners
 from core.data_exporter import DataExporter  
 from core.session_manager import SessionManager
 from core.telemetry_processor import TelemetryProcessor
@@ -34,6 +35,7 @@ class F1ReplayWindow(arcade.Window):
         self.driver_metadata = {}  # Loaded from results.db
         self.sorted_drivers = []   # For the leaderboard
         self.track_points = []
+        self.corner_data = []
         self.session_time = 0.0   
         self.speed_multiplier = 1  
         
@@ -42,28 +44,28 @@ class F1ReplayWindow(arcade.Window):
         self.setup()
 
     def setup(self):
-        # 1. Load the F1 Session
+        # Load the F1 Session
         self.manager = SessionManager(year=year, gp=GP_NAME.title(), session_type="R")
         
         if self.manager.session is None:
             return
 
-        # 2. Create the Disk Source (The .db files) 
+        # Create the Disk Source (The .db files) 
         self.exporter = DataExporter(self.manager)
         self.exporter.export_all_drivers() 
 
-        # 3. Prepare UI Metadata & Layout 
-        results_df = self.manager.get_session_results()
-        if results_df is not None:
-            results_df = results_df.sort_values(by='GridPosition', na_position='last')
+        # Prepare UI Metadata & Layout 
+        self.results_df = self.manager.get_session_results()
+        if self.results_df is not None:
+            self.results_df = self.results_df.sort_values(by='GridPosition', na_position='last')
             
-            # Now convert to dictionary and list to lock in this "starting order" [cite: 2026-03-07]
-            self.driver_metadata = results_df.set_index('Abbreviation').to_dict('index')
+            self.driver_metadata = self.results_df.set_index('Abbreviation').to_dict('index')
             self.sorted_drivers = list(self.driver_metadata.keys())
         
         self.rotation = self.manager.get_circuit_rotation() or 0
 
-        # 4. Generate the Racing Line (Track Map) 
+        # Generate the Racing Line (Track Map) and corner
+        self.corner_data = self.manager.get_corner_data()
         fastest_lap = self.manager.get_session_fastest_lap()
         if fastest_lap is not None:
             tp_track = TelemetryProcessor(fastest_lap)
@@ -75,11 +77,11 @@ class F1ReplayWindow(arcade.Window):
                 )
                 (self.track_points, self.offset_x, self.offset_y, self.track_scale) = layout
             
-        # 5. Pre-calculate Colors for Performance 
+        # Pre-calculate Colors for Performance 
         self.car_colors = {abbr: hex_to_rgb(info.get('TeamColor', '#FFFFFF')) 
                            for abbr, info in self.driver_metadata.items()}
 
-        # 6. Linear Timing Initialization 
+        # Linear Timing Initialization 
         self.is_paused = False      
         self.current_car_positions = {abbr: (0, 0) for abbr in self.driver_metadata.keys()}
         self.driver_row_counters = {abbr: 0 for abbr in self.driver_metadata.keys()}
@@ -159,19 +161,25 @@ class F1ReplayWindow(arcade.Window):
     def on_draw(self):
         self.clear()
         
-        # 1. Draw Track Layout
+        # Draw Track Layout
         if self.track_points:
-            arcade.draw_line_strip(self.track_points, arcade.color.WHITE, 8)
-            
-            # 2. Draw the "In-field" (Black line to 'hollow out' the middle) 
-            # Making this slightly thinner (e.g., width 4) creates the two-line effect
+            arcade.draw_line_strip(self.track_points, (255, 255, 255, 200), 8)
+             # Draw the "In-field" (Black line to 'hollow out' the middle) 
             arcade.draw_line_strip(self.track_points, arcade.color.BLACK, 4)
-            
-        # 2. Draw Leaderboard (Left Side Cards) 
-        self.draw_leaderboard()
         
-        # 3. Draw Driver Circles (The "Cars")
-        # Loop through sorted_drivers to maintain layering based on rank 
+        if self.corner_data:
+            try:
+                draw_corners(self.corner_data, self.rotation, self.track_scale, self.offset_x, self.offset_y)
+            except Exception as e:
+                print(f"Skipping corner draw due to error: {e}")
+                
+        # Draw Leaderboard
+        draw_leaderboard(self.sorted_drivers, self.driver_metadata, self.car_colors, self.height)
+        
+        total_laps = self.results_df['Laps'].max()
+        draw_lap_number(self.sorted_drivers, self.driver_metadata, self.width, self.height, int(total_laps))
+        
+        # Draw Driver Circles (The "Cars")
         for abbr in self.sorted_drivers:
             pos = self.current_car_positions.get(abbr)
             if pos is None or pos == (0, 0):
@@ -184,72 +192,10 @@ class F1ReplayWindow(arcade.Window):
             )
             color = self.car_colors.get(abbr, arcade.color.GRAY)
             arcade.draw_circle_filled(fx, fy, 8, color)
-            arcade.draw_circle_outline(fx, fy, 8, arcade.color.WHITE, 1.5)
             
             arcade.draw_text(abbr, fx + 12, fy, arcade.color.WHITE, 10, bold=True, anchor_y="center")
     
-    def draw_leaderboard(self):
-        start_x, start_y = 130, SCREEN_HEIGHT - 70
-        box_width = 240
-        box_height = 28
-        spacing = 32
-        border_thickness = 3
-
-        for i, abbr in enumerate(self.sorted_drivers):
-            meta = self.driver_metadata.get(abbr, {})
-            color = self.car_colors.get(abbr, arcade.color.GRAY)
-            curr_y = start_y - (i * spacing)
-            
-            # Draw the Border (Team Color) 
-            arcade.draw_rect_filled(
-                arcade.rect.XYWH(start_x, curr_y, box_width, box_height), 
-                color
-            )
-            # Draw the Inner Fill (Solid Black)
-            arcade.draw_rect_filled(
-                arcade.rect.XYWH(
-                    start_x, curr_y, 
-                    box_width - border_thickness, 
-                    box_height - border_thickness
-                ), 
-                arcade.color.BLACK
-            )
-            # --- GAP LOGIC ---
-            if i == 0:
-                gap_display = "INTERVAL"
-            else:
-                # 1. Get the driver ahead of this one
-                ahead_abbr = self.sorted_drivers[i-1]
-                ahead_meta = self.driver_metadata.get(ahead_abbr, {})
-                
-                # 2. Calculate the physical distance between them in meters
-                dist_now = meta.get('total_distance', 0.0)
-                dist_ahead = ahead_meta.get('total_distance', 0.0)
-                gap_meters = dist_ahead - dist_now
-                
-                # 3. Convert speed to m/s for the time calculation
-                speed_kmh = meta.get('speed', 0.1) 
-                speed_ms = max(speed_kmh / 3.6, 0.5) # Minimum speed to avoid infinity
-                
-                gap_seconds = gap_meters / speed_ms
-                gap_display = f"+{max(0, gap_seconds):.1f}s"
-            # -----------------------
-
-            
-            # Draw Rank & Abbreviation (Bold White)  
-            arcade.draw_text(
-                f"{i+1}  {abbr}", 
-                start_x - 110, curr_y, 
-                arcade.color.WHITE, 12, bold=True, anchor_y="center"
-            )
-            # Draw Gap Time (Bold White) [cite: 2026-02-20]
-            arcade.draw_text(
-                gap_display, 
-                start_x + 110, curr_y, 
-                arcade.color.WHITE, 11, bold=True, anchor_x="right", anchor_y="center"
-            )
-            
-            
+           
 def main(delete_on_exit=True):
     """
     Main entry point for the F1 Replay Visualizer.

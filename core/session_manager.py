@@ -104,4 +104,24 @@ class SessionManager:
             print(f"Error retrieving circuit rotation: {e}")
             return None
     
+    def get_corner_data(self):
+        if self.session is None:
+            return None
+
+        try:
+            circuit_info = self.session.get_circuit_info()
+            corners = []
+            for _, corner in circuit_info.corners.iterrows():
+                # Clean the data: ensure numbers are strings for the labels [cite: 2026-03-07]
+                corners.append({
+                    "number": str(corner['Number']), 
+                    "x": float(corner['X']),
+                    "y": float(corner['Y']),
+                    "angle": float(corner['Angle']), # Added: useful for rotating the label text [cite: 2026-03-07]
+                    "distance": float(corner['Distance']) # Added: helps identify which lap segment it's in [cite: 2026-03-07]
+                })
+            return corners
+        except Exception as e:
+            print(f"Error retrieving corner data: {e}")
+            return None
     
