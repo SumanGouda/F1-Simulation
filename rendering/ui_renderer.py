@@ -1,6 +1,7 @@
 # Starter file
 import arcade
 import math
+import os
 
 def draw_leaderboard(sorted_drivers, driver_metadata, car_colors, screen_height):
     # Moved start_y down from -70 to -120 to 'drag' it down the screen
@@ -57,8 +58,8 @@ def draw_leaderboard(sorted_drivers, driver_metadata, car_colors, screen_height)
         )
 
 def draw_lap_number(sorted_drivers, driver_metadata, screen_width, screen_height, total_laps): 
-    start_x = screen_width - 150 
-    start_y = screen_height - 70
+    start_x = screen_width - 80
+    start_y = screen_height - 75
     
     box_width = 80
     box_height = 50  
@@ -158,45 +159,85 @@ def draw_weather_card(weather_row, screen_width, screen_height):
     if weather_row is None:
         return
 
-    # Card Dimensions and Position (Bottom Left)
-    box_width, box_height = 240, 110
-    center_x, center_y = 145, 75 
+    # --- INITIALIZE STATIC CACHE (Runs once) ---
+    if not hasattr(draw_weather_card, "icons"):
+        icon_path = "assets/images"
+        if not os.path.exists(icon_path):
+            print(f"❌ ERROR: Icon folder not found at {os.path.abspath(icon_path)}")
+            draw_weather_card.icons = None
+        else:
+            try:
+                draw_weather_card.icons = {
+                    'air_hot': arcade.load_texture(os.path.join(icon_path, "air_hot.png")),
+                    'air_cold': arcade.load_texture(os.path.join(icon_path, "air_cold.png")),
+                    'track': arcade.load_texture(os.path.join(icon_path, "track_temp.png")),
+                    'humidity': arcade.load_texture(os.path.join(icon_path, "humidity.png")),
+                    'wind': arcade.load_texture(os.path.join(icon_path, "wind.png"))
+                }
+                print("✅ Weather icons loaded successfully.")
+            except Exception as e:
+                print(f"❌ ERROR: Failed to load icons: {e}")
+                draw_weather_card.icons = None
 
-    # Draw Card Border and Background
-    arcade.draw_rect_filled(arcade.rect.XYWH(center_x, center_y, box_width, box_height), arcade.color.WHITE)
-    arcade.draw_rect_filled(arcade.rect.XYWH(center_x, center_y, box_width - 4, box_height - 4), arcade.color.BLACK)
+    # --- DEFINE CARD POSITION (Top Right) ---
+    box_width, box_height = 260, 110
+    padding = 20 
+    center_x = screen_width - (box_width / 2) - padding
+    center_y = screen_height - (box_height / 2) - padding - 100
 
-    try:
-        # Extracting data from the sqlite3.Row object
-        air_temp = f"{weather_row['AirTemp']}°C"
-        track_temp = f"{weather_row['TrackTemp']}°C"
-        hum = f"{weather_row['Humidity']}%"
-        wind = f"{weather_row['WindSpeed']}m/s"
-        
-        is_raining = weather_row['Rainfall']
-        status_text = "RAIN" if is_raining else "DRY"
-        status_color = arcade.color.SKY_BLUE if is_raining else arcade.color.LIGHT_GREEN
-    except (KeyError, TypeError):
-        return
-
-    # Positioning Constants
+    # --- DEFINE TEXT/ICON ANCHORS (Relative to center_x/y) ---
     left_align = center_x - (box_width / 2) + 15
-    top_y = center_y + (box_height / 2) - 20
-
-    # Header
-    arcade.draw_text("SESSION WEATHER", left_align, top_y, arcade.color.YELLOW, 10, bold=True)
+    mid_point = center_x + (box_width / 2) - 85 
     
-    # Status Indicator (Circle + Text)
-    arcade.draw_circle_filled(center_x + (box_width/2) - 65, top_y + 5, 5, status_color)
-    arcade.draw_text(status_text, center_x + (box_width/2) - 55, top_y, status_color, 10, bold=True)
+    top_y_text = center_y + (box_height / 2) - 20
+    row1_y = center_y + 5    
+    row2_y = center_y - 25   
+    icon_size = 16      
+    font_size = 13
 
-    # Weather Details Grid
-    row1 = f"AIR TEMP: {air_temp:>8} | TRACK: {track_temp:>8}"
-    row2 = f"HUMIDITY: {hum:>8} | WIND: {wind:>8}"
+    # --- DRAW HEADER ---
+    arcade.draw_text("SESSION WEATHER", left_align, top_y_text, arcade.color.YELLOW, font_size, bold=True)
     
-    arcade.draw_text(row1, left_align, top_y - 35, arcade.color.WHITE, 9, font_name="Courier New")
-    arcade.draw_text(row2, left_align, top_y - 55, arcade.color.WHITE, 9, font_name="Courier New")
-                   
+    #  Dry/Rain status indicator
+    status_text = "DRY" if not weather_row['Rainfall'] else "RAIN"
+    status_color = arcade.color.LIGHT_GREEN if not weather_row['Rainfall'] else arcade.color.SKY_BLUE
+    arcade.draw_text(status_text, center_x + (box_width/2) - 45, top_y_text, status_color, font_size, bold=True)
+
+    # --- DRAW CONTENT ---
+    if draw_weather_card.icons:
+         # Row 1: Air & Track
+        temp = weather_row['AirTemp'] 
+        icon_key = 'air_hot' if temp >= 25 else 'air_cold'
+        arcade.draw_texture_rect(draw_weather_card.icons[icon_key],
+            arcade.rect.XYWH(left_align + 7, row1_y, icon_size, icon_size))
+        arcade.draw_text(f"{temp}°C", left_align + 28, row1_y, arcade.color.WHITE, font_size, anchor_y="center")
+        arcade.draw_text(f"{temp}°C", left_align + 28, row1_y, arcade.color.WHITE, font_size, anchor_y="center")
+
+        arcade.draw_texture_rect(draw_weather_card.icons['track'],
+            arcade.rect.XYWH(mid_point + 7, row1_y, icon_size, icon_size))
+        arcade.draw_text(f"{weather_row['TrackTemp']}°C", mid_point + 28, row1_y, arcade.color.WHITE, font_size, anchor_y="center")
+        
+        # Row 2: Humidity & Wind
+        arcade.draw_texture_rect(draw_weather_card.icons['humidity'],
+            arcade.rect.XYWH(left_align + 7, row2_y, icon_size, icon_size))
+        arcade.draw_text(f"{weather_row['Humidity']}%", left_align + 28, row2_y, arcade.color.WHITE, font_size, anchor_y="center")
+ 
+        arcade.draw_texture_rect(draw_weather_card.icons['wind'],
+            arcade.rect.XYWH(mid_point + 7, row2_y, icon_size, icon_size))
+        arcade.draw_text(f"{weather_row['WindSpeed']}m/s", mid_point + 28, row2_y, arcade.color.WHITE, font_size, anchor_y="center")
+        
+    else: 
+        arcade.draw_text(f"Air: {weather_row['AirTemp']}°C", left_align, row1_y, arcade.color.WHITE, font_size)
+        arcade.draw_text(f"Trk: {weather_row['TrackTemp']}°C", mid_point, row1_y, arcade.color.WHITE, font_size)
+        arcade.draw_text(f"Hum: {weather_row['Humidity']}%", left_align, row2_y, arcade.color.WHITE, font_size)
+        arcade.draw_text(f"Wnd: {weather_row['WindSpeed']}m/s", mid_point, row2_y, arcade.color.WHITE, font_size)
+   
+   
+   
+   
+   
+   
+                         
 class UIRenderer:
     def __init__(self, width, height):
         self.width = width
