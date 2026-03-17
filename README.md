@@ -85,6 +85,12 @@ Contributions are what make the open-source community such an amazing place to l
 
 Please make sure to update tests as appropriate to maintain project stability.
 
+<div align="center">
+  <video src="assets/demo_video.mp4" width="800" controls>
+    Your browser does not support the video tag.
+  </video>
+</div>
+
 ## 📄 License
 
 Distributed under the **MIT License**. See `LICENSE` for more information.
