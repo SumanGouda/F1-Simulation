@@ -46,6 +46,28 @@ def calculate_weather_frame_ratio(driver_abbrs, db_path):
     
     return 1 
 
+def get_max_session_rows(driver_abbrs, db_root):
+    max_rows = 0
+    
+    for abbr in driver_abbrs:
+        db_path = os.path.join(db_root, f"{abbr}.db")
+        if not os.path.exists(db_path):
+            continue
+            
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # SQL COUNT is nearly instantaneous compared to len(dataframe)
+        cursor.execute("SELECT COUNT(*) FROM telemetry")
+        count = cursor.fetchone()[0]
+        
+        if count > max_rows:
+            max_rows = count
+            
+        conn.close()
+    
+    return max_rows
+
 def prepare_track_layout(raw_x, raw_y, screen_width, screen_height, padding_left, rotation):
     """Fits the track perfectly within the available screen space."""
     draw_width = screen_width - padding_left - 100

@@ -2,6 +2,7 @@
 import arcade
 import math
 import os
+import sqlite3
 
 def draw_leaderboard(sorted_drivers, driver_metadata, car_colors, screen_height):
     # Moved start_y down from -70 to -120 to 'drag' it down the screen
@@ -232,48 +233,49 @@ def draw_weather_card(weather_row, screen_width, screen_height):
         arcade.draw_text(f"Hum: {weather_row['Humidity']}%", left_align, row2_y, arcade.color.WHITE, font_size)
         arcade.draw_text(f"Wnd: {weather_row['WindSpeed']}m/s", mid_point, row2_y, arcade.color.WHITE, font_size)
    
-   
-   
-   
-   
-   
-                         
-class UIRenderer:
-    def __init__(self, width, height):
-        self.width = width
-        self.height = height
+def draw_track(track_points, drv, current_lap, db_root):
+    if track_points is None:
+        return
+    db_path =  f"{db_root}/race_data.db"
+    
+    if not hasattr(draw_track, "current_status"):
+        draw_track.current_status = "1"
+        draw_track.last_checked_lap = -1
 
-    def draw_driver_info(self, driver_name, team_name):
-        arcade.draw_text(
-            f"Driver: {driver_name}",
-            20,
-            self.height - 40,
-            arcade.color.WHITE,
-            16
-        )
-        arcade.draw_text(
-            f"Team: {team_name}",
-            20,
-            self.height - 70,
-            arcade.color.LIGHT_GRAY,
-            14
-        )
+    if current_lap != draw_track.last_checked_lap:
+        try:
+            leader = drv[0]
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            
+            query = "SELECT TrackStatus FROM laps WHERE Driver = ? AND LapNumber = ?"
+            cursor.execute(query, (leader, current_lap))
+            result = cursor.fetchone()
+            
+            if result:
+                draw_track.current_status = str(result[0])
+                draw_track.last_checked_lap = current_lap
+            
+            conn.close()
+        except Exception as e:
+            print(f"Database injection error: {e}")
+ 
+    status_colors = {
+        '1': arcade.color.WHITE,
+        '2': arcade.color.YELLOW,
+        '4': arcade.color.ORANGE,
+        '5': arcade.color.DARK_RED,
+        '6': arcade.color.VIVID_VIOLET,
+        '7': arcade.color.RED
+    }
+    priority_order = ['5', '4', '6', '7', '2', '1'] 
+    
+    color = arcade.color.ASH_GREY  # fallback
+    for code in priority_order:
+        if code in draw_track.current_status:
+            color = status_colors[code]
+            break
 
-    def draw_speed(self, speed):
-        arcade.draw_text(
-            f"{int(speed)} km/h",
-            self.width - 200,
-            40,
-            arcade.color.RED,
-            28,
-            bold=True
-        )
-
-    def draw_lap_time(self, lap_time):
-        arcade.draw_text(
-            f"Lap Time: {lap_time}",
-            20,
-            self.height - 100,
-            arcade.color.YELLOW,
-            14
-        )
+    arcade.draw_line_strip(track_points, color, 6)
+    arcade.draw_line_strip(track_points, arcade.color.BLACK, 3)
+  

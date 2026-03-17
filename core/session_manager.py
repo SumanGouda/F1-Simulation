@@ -15,6 +15,20 @@ class SessionManager:
         except Exception as e:
             print(f"Error loading session: {e}")
 
+    def get_race_laps_data(self):
+        if self.session is None:
+            return None
+
+        try:
+            return self.session.laps[[
+                'Driver', 'DriverNumber', 'LapTime', 'LapNumber', 'Stint', 'Team', 'FreshTyre',
+                'PitOutTime', 'PitInTime', 'Sector1Time', 'Sector2Time', 'Sector3Time', 'SpeedST',
+                'Compound', 'TyreLife', 'TrackStatus', 'Position', 'Deleted', 'DeletedReason'
+            ]]
+        except Exception as e:
+            print(f"Error retrieving race data: {e}")
+            return None
+    
     def get_driver_laps(self, driver, fastest_lap=False):
         if self.session is None:
             return None

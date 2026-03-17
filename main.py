@@ -6,11 +6,11 @@ import os
 import warnings
 warnings.filterwarnings("ignore")
 import pandas as pd
-from rendering.ui_renderer import draw_leaderboard, draw_lap_number, draw_corners, draw_weather_card
-from core.data_exporter import DataExporter, get_max_session_rows 
+from rendering.ui_renderer import draw_leaderboard, draw_lap_number, draw_corners, draw_weather_card, draw_track
+from core.data_exporter import DataExporter
 from core.session_manager import SessionManager
 from core.telemetry_processor import TelemetryProcessor
-from utils.helpers import prepare_track_layout, get_screen_coords, calculate_weather_frame_ratio
+from utils.helpers import prepare_track_layout, get_screen_coords, calculate_weather_frame_ratio, get_max_session_rows 
 
 # Layout Constants
 SCREEN_WIDTH = 1500
@@ -108,8 +108,8 @@ class F1ReplayWindow(arcade.Window):
         if self.is_paused:
             return
 
-        # 1. Weather Update Logic
-        # We trigger if it's the very first frame (0) OR the ratio is hit
+        # Weather Update Logic
+        # trigger if it's the very first frame (0) OR the ratio is hit
         if self.global_frame_counter % self.weather_frame_ratio == 0:
             weather_db_path = os.path.join(self.db_path, "weather.db")
             
@@ -131,13 +131,13 @@ class F1ReplayWindow(arcade.Window):
                 except Exception as e:
                     print(f"Weather Update Error: {e}")
 
-        # 2. Advance the Master Frame Counter
-        # We increment AFTER the weather check so frame 0 is handled first
+        # Advance the Master Frame Counter
+        # increment AFTER the weather check so frame 0 is handled first
         self.global_frame_counter += 1
 
         race_positions = []
 
-        # 3. Query each driver's database (Car Updates)
+        # Query each driver's database (Car Updates)
         for abbr in self.driver_metadata.keys():
             db_path = os.path.join(self.db_path, f"{abbr}.db")
             if not os.path.exists(db_path): 
@@ -191,19 +191,22 @@ class F1ReplayWindow(arcade.Window):
     def on_draw(self):
         self.clear()
         
-        # 1. Draw Track Layout
+        # Draw Track Layout
         if self.track_points:
-            arcade.draw_line_strip(self.track_points, (255, 255, 255, 200), 8)
-            arcade.draw_line_strip(self.track_points, arcade.color.BLACK, 4)
+            try:  
+                leader_lap = self.driver_metadata.get(self.sorted_drivers[0], {}).get('lap_number', 0)
+                draw_track(self.track_points,  self.sorted_drivers, leader_lap, self.db_path)
+            except Exception as e:
+                print(f"Skipping track draw due to error: {e}")
         
-        # 2. Draw Corners
+        # Draw Corners
         if self.corner_data:
             try:
                 draw_corners(self.corner_data, self.rotation, self.track_scale, self.offset_x, self.offset_y)
             except Exception as e:
                 print(f"Skipping corner draw due to error: {e}")
                 
-        # 3. Draw Driver Circles (The "Cars")
+        # Draw Driver Circles (The "Cars")
         for abbr in self.sorted_drivers:
             pos = self.current_car_positions.get(abbr)
             if pos is None or pos == (0, 0):
@@ -217,7 +220,7 @@ class F1ReplayWindow(arcade.Window):
             arcade.draw_circle_filled(fx, fy, 8, color)
             arcade.draw_text(abbr, fx + 12, fy, arcade.color.WHITE, 10, bold=True, anchor_y="center")
         
-        # 4. Draw Primary UI Elements
+        # Draw Primary UI Elements
         draw_leaderboard(self.sorted_drivers, self.driver_metadata, self.car_colors, self.height)
         
         try:
@@ -226,10 +229,10 @@ class F1ReplayWindow(arcade.Window):
             total_laps = 0
         draw_lap_number(self.sorted_drivers, self.driver_metadata, self.width, self.height, int(total_laps))
         
-        # 5. Draw Weather Card (Last Layer) 
+        # Draw Weather Card (Last Layer) 
         if self.current_weather is not None:
             draw_weather_card(self.current_weather, self.width, self.height)
-            
+           
 def main(delete_on_exit=True):
     """
     Main entry point for the F1 Replay Visualizer.

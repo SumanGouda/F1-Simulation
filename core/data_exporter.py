@@ -16,7 +16,7 @@ class DataExporter:
         if not os.path.exists(self.base_path):
             os.makedirs(self.base_path)
 
-    def _export_driver_race(self, driver_abbr):
+    def _export_driver_tel(self, driver_abbr):
         db_path = os.path.join(self.base_path, f"{driver_abbr}.db")
         
         # Check if the file exists before doing ANY heavy lifting 
@@ -109,8 +109,7 @@ class DataExporter:
             return
 
         conn = sqlite3.connect(db_path)
-        
-        # Ensure we start fresh with the cleaned feature [cite: 2026-01-20]
+         
         conn.execute('DROP TABLE IF EXISTS weather')
         
         # Cleaning: Convert Timedelta to total seconds for easier SQL math
@@ -127,6 +126,38 @@ class DataExporter:
         conn.close()
         print(f"Weather export complete: {db_path}")
 
+    def _export_race_data(self): 
+        db_path = os.path.join(self.base_path, "race_data.db")
+        
+        if os.path.exists(db_path):
+            print(f"Skipping Race Data: {db_path} already exists.")
+            return
+
+        race_data = self.sm.get_race_laps_data()
+        if race_data is None or race_data.empty:
+            print("No race data found to export.")
+            return
+    
+        conn = sqlite3.connect(db_path)
+        conn.execute('DROP TABLE IF EXISTS laps')
+        
+        race_df = race_data.copy()
+        
+        # Convert all time columns to seconds
+        time_cols = ['Sector1Time', 'Sector2Time', 'Sector3Time', 'LapTime', 'PitOutTime', 'PitInTime']
+        for col in time_cols:
+            if col in race_df.columns:
+                race_df[col] = race_df[col].dt.total_seconds() 
+             
+        race_df.to_sql('laps', conn, if_exists='replace', index=False)
+        
+        # Indexing for performance
+        conn.execute("CREATE INDEX idx_race_time ON laps(Time)")
+        
+        conn.commit()
+        conn.close()
+        print(f"Race export complete: {db_path}")
+    
     def export_all_data(self):
         results = self.sm.get_session_results()
         if results is None or results.empty:
@@ -135,11 +166,17 @@ class DataExporter:
 
         driver_list = results['Abbreviation'].tolist()
         print(f"Starting sequential export for {len(driver_list)} drivers...")
-   
+
+        try:
+            print("Processing: Consolidated Race Laps...")
+            self._export_race_data()
+        except Exception as e:
+            print(f"Failed to export consolidated race data: {e}")
+            
         for abbr in driver_list:
             try:
                 print(f"Processing Driver: {abbr}...")
-                self._export_driver_race(abbr)
+                self._export_driver_tel(abbr)
             except Exception as e:
                 print(f"Failed export for {abbr}: {e}")
 
@@ -152,25 +189,4 @@ class DataExporter:
         print("Export complete! All databases (Drivers & Weather) are ready.")       
 
 # Helper Functions
-              
-def get_max_session_rows(driver_abbrs, db_root):
-    max_rows = 0
-    
-    for abbr in driver_abbrs:
-        db_path = os.path.join(db_root, f"{abbr}.db")
-        if not os.path.exists(db_path):
-            continue
-            
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        # SQL COUNT is nearly instantaneous compared to len(dataframe)
-        cursor.execute("SELECT COUNT(*) FROM telemetry")
-        count = cursor.fetchone()[0]
-        
-        if count > max_rows:
-            max_rows = count
-            
-        conn.close()
-    
-    return max_rows
+ 
