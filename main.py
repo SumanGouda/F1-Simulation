@@ -33,19 +33,16 @@ class F1ReplayWindow(arcade.Window):
         arcade.set_background_color(arcade.color.BLACK)
 
         # Game State
-        self.driver_metadata = {}  # Loaded from results.db
-        self.sorted_drivers = []   # For the leaderboard
+        self.driver_metadata = {}   
+        self.sorted_drivers = []    
         self.track_points = []
         self.corner_data = []
         self.session_time = 0.0   
         self.speed_multiplier = 1  
-        
         self.is_paused = False
-        
-        self.current_race_time = pd.Timedelta(seconds=0)
-        
-        # This will hold the weather snapshot for on_draw
+        self.current_race_time = pd.Timedelta(seconds=0) 
         self.current_weather = None
+        self.selected_driver = None
         
         self.setup()
 
@@ -130,8 +127,7 @@ class F1ReplayWindow(arcade.Window):
                         self.weather_index += 1
                 except Exception as e:
                     print(f"Weather Update Error: {e}")
-
-        # Advance the Master Frame Counter
+ 
         # increment AFTER the weather check so frame 0 is handled first
         self.global_frame_counter += 1
 
@@ -146,8 +142,7 @@ class F1ReplayWindow(arcade.Window):
             try:
                 conn = sqlite3.connect(db_path)
                 cursor = conn.cursor()
-                
-                # Each car moves one row per frame
+                 
                 current_row_index = self.driver_row_counters[abbr]
                 
                 query = """
@@ -206,23 +201,53 @@ class F1ReplayWindow(arcade.Window):
             except Exception as e:
                 print(f"Skipping corner draw due to error: {e}")
                 
-        # Draw Driver Circles (The "Cars")
-        for abbr in self.sorted_drivers:
-            pos = self.current_car_positions.get(abbr)
-            if pos is None or pos == (0, 0):
-                continue
+        # Draw Driver Circles (The "Cars") 
+        if self.selected_driver is None: 
+            # Draw All Drivers
+            for abbr in self.sorted_drivers:
+                pos = self.current_car_positions.get(abbr)
+                if pos is None or pos == (0, 0):
+                    continue
 
-            fx, fy = get_screen_coords(
-                pos[0], pos[1],
-                self.rotation, self.track_scale, self.offset_x, self.offset_y
-            )
-            color = self.car_colors.get(abbr, arcade.color.GRAY)
-            arcade.draw_circle_filled(fx, fy, 8, color)
-            arcade.draw_text(abbr, fx + 12, fy, arcade.color.WHITE, 10, bold=True, anchor_y="center")
-        
-        # Draw Primary UI Elements
-        draw_leaderboard(self.sorted_drivers, self.driver_metadata, self.car_colors, self.height)
-        
+                fx, fy = get_screen_coords(
+                    pos[0], pos[1],
+                    self.rotation, self.track_scale, self.offset_x, self.offset_y
+                )
+                color = self.car_colors.get(abbr, arcade.color.GRAY)
+                arcade.draw_circle_filled(fx, fy, 8, color)
+                arcade.draw_text(abbr, fx + 12, fy, arcade.color.WHITE, 10, bold=True, anchor_y="center")
+        else:
+            # Draw the Selected Driver
+            abbr = self.selected_driver
+            pos = self.current_car_positions.get(abbr)
+            
+            if pos is not None and pos != (0, 0):
+                fx, fy = get_screen_coords(
+                    pos[0], pos[1],
+                    self.rotation, self.track_scale, self.offset_x, self.offset_y
+                )
+                color = self.car_colors.get(abbr, arcade.color.GRAY)
+                try: 
+                    rank = self.sorted_drivers.index(abbr) + 1
+                    rank_text = f"P{rank}"
+                except ValueError:
+                    rank_text = "P??"
+                 
+                arcade.draw_circle_filled(fx, fy, 10, color)  
+                arcade.draw_circle_outline(fx, fy, 13, arcade.color.WHITE, 2) 
+                
+                arcade.draw_text(
+                    f"{abbr} [{rank_text}]", 
+                    fx + 18, fy, 
+                    arcade.color.WHITE, 12, bold=True, anchor_y="center"
+                )
+        # Draw Leaderboard
+        self.leaderboard_hitboxes = draw_leaderboard(
+            self.sorted_drivers, 
+            self.driver_metadata, 
+            self.car_colors, 
+            self.height
+        )
         try:
             total_laps = int(self.results_df['Laps'].max()) if self.results_df is not None else 0
         except (ValueError, TypeError):
@@ -232,7 +257,20 @@ class F1ReplayWindow(arcade.Window):
         # Draw Weather Card (Last Layer) 
         if self.current_weather is not None:
             draw_weather_card(self.current_weather, self.width, self.height)
-           
+
+    def on_mouse_press(self, x, y, button, modifiers):
+        if button == arcade.MOUSE_BUTTON_LEFT:
+            hitboxes = getattr(self, "leaderboard_hitboxes", []) or []
+            
+            # Check if we hit a driver
+            for box in hitboxes:
+                if box["left"] <= x <= box["right"] and box["bottom"] <= y <= box["top"]:
+                    print(f"Selecting Driver: {box['driver']}")
+                    self.selected_driver = box['driver']
+                    return 
+            
+            self.selected_driver = None   # If clicks outside then will move back to None
+            
 def main(delete_on_exit=True):
     """
     Main entry point for the F1 Replay Visualizer.
@@ -252,4 +290,3 @@ def main(delete_on_exit=True):
 
 if __name__ == "__main__": 
     main(delete_on_exit=False)
-

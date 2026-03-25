@@ -11,6 +11,8 @@ def draw_leaderboard(sorted_drivers, driver_metadata, car_colors, screen_height)
     box_height = 28
     spacing = 32
     border_thickness = 3
+    
+    hitboxes = []
 
     for i, abbr in enumerate(sorted_drivers):
         meta = driver_metadata.get(abbr, {})
@@ -31,8 +33,7 @@ def draw_leaderboard(sorted_drivers, driver_metadata, car_colors, screen_height)
             ), 
             arcade.color.BLACK
         )
-
-        # --- GAP LOGIC ---
+         # --- GAP LOGIC ---
         if i == 0:
             gap_display = "INTERVAL"
         else:
@@ -57,6 +58,15 @@ def draw_leaderboard(sorted_drivers, driver_metadata, car_colors, screen_height)
             start_x + 110, curr_y, 
             arcade.color.WHITE, 11, bold=True, anchor_x="right", anchor_y="center"
         )
+        hitboxes.append({
+            "left": start_x - (box_width / 2),
+            "right": start_x + (box_width / 2),
+            "bottom": curr_y - (box_height / 2),
+            "top": curr_y + (box_height / 2),
+            "driver": abbr
+        })
+        
+    return hitboxes
 
 def draw_lap_number(sorted_drivers, driver_metadata, screen_width, screen_height, total_laps): 
     start_x = screen_width - 80
