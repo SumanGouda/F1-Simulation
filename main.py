@@ -6,6 +6,7 @@ import os
 import warnings
 warnings.filterwarnings("ignore")
 import pandas as pd
+import numpy as np
 from rendering.ui_renderer import draw_leaderboard, draw_lap_number, draw_corners, draw_weather_card, draw_track
 from core.data_exporter import DataExporter
 from core.session_manager import SessionManager
@@ -34,8 +35,7 @@ class F1ReplayWindow(arcade.Window):
 
         # Game State
         self.driver_metadata = {}   
-        self.sorted_drivers = []    
-        self.track_points = []
+        self.sorted_drivers = []  
         self.corner_data = []
         self.session_time = 0.0   
         self.speed_multiplier = 1  
@@ -43,6 +43,12 @@ class F1ReplayWindow(arcade.Window):
         self.current_race_time = pd.Timedelta(seconds=0) 
         self.current_weather = None
         self.selected_driver = None
+        
+        # FIX for Bug 2: Explicitly initialize raw coordinate properties
+        self.raw_x = None
+        self.raw_y = None
+        self.fx = None
+        self.fy = None
         
         self.setup()
 
@@ -54,7 +60,7 @@ class F1ReplayWindow(arcade.Window):
             print("Failed to load F1 Session.")
             return
 
-        # Create the Disk Source (The .db files) 
+        # Create the .db files 
         self.exporter = DataExporter(self.manager)
         self.exporter.export_all_data()
         self.db_path = f"database/race_{self.manager.gp.lower()}"
@@ -68,20 +74,26 @@ class F1ReplayWindow(arcade.Window):
         
         self.rotation = self.manager.get_circuit_rotation() or 0
 
-        # Generate the Racing Line (Track Map) and corner
+        # Generate the Racing Line and corner
         self.corner_data = self.manager.get_corner_data()
+        
         fastest_lap = self.manager.get_session_fastest_lap()
         if fastest_lap is not None:
             tp_track = TelemetryProcessor(fastest_lap)
             raw_x, raw_y = tp_track.get_track_coordinates()
-            if raw_x is not None and raw_y is not None:
-                layout = prepare_track_layout(
-                    raw_x, raw_y, SCREEN_WIDTH, SCREEN_HEIGHT, 
-                    padding_left=320, rotation=self.rotation
-                )
-                (self.track_points, self.offset_x, self.offset_y, self.track_scale) = layout
             
-        # Pre-calculate Colors for Performance 
+            if raw_x is not None and raw_y is not None: 
+                self.raw_x = raw_x
+                self.raw_y = raw_y
+                
+                (self.fx, self.fy, self.offset_x, self.offset_y, self.track_scale) = prepare_track_layout(
+                        raw_x, raw_y, SCREEN_WIDTH, SCREEN_HEIGHT, 
+                        padding_left=320, rotation=self.rotation
+                    )            
+                self.track_scale_focused = self.track_scale * 0.30   # For focused view change this parameter
+                self.foc_offset_x = self.offset_x + 300
+                self.foc_offset_y = self.offset_y - 80
+ 
         self.car_colors = {abbr: hex_to_rgb(info.get('TeamColor', '#FFFFFF')) 
                            for abbr, info in self.driver_metadata.items()}
 
@@ -90,11 +102,10 @@ class F1ReplayWindow(arcade.Window):
         self.current_car_positions = {abbr: (0, 0) for abbr in self.driver_metadata.keys()}
         self.driver_row_counters = {abbr: 0 for abbr in self.driver_metadata.keys()}
         
-        # 7. Frame & Weather Timing Logic 
+        # Frame & Weather Timing Logic 
         self.max_rows = get_max_session_rows(self.driver_metadata.keys(), self.db_path)
         self.weather_frame_ratio = calculate_weather_frame_ratio(self.driver_metadata.keys(), self.db_path)
-
-        # 8. Master Counters
+ 
         self.global_frame_counter = 0
         self.weather_index = 0
         self.current_weather = None
@@ -106,7 +117,6 @@ class F1ReplayWindow(arcade.Window):
             return
 
         # Weather Update Logic
-        # trigger if it's the very first frame (0) OR the ratio is hit
         if self.global_frame_counter % self.weather_frame_ratio == 0:
             weather_db_path = os.path.join(self.db_path, "weather.db")
             
@@ -116,7 +126,6 @@ class F1ReplayWindow(arcade.Window):
                     conn.row_factory = sqlite3.Row 
                     cursor = conn.cursor()
                     
-                    # LIMIT 1 OFFSET ? pulls the exact row for the current weather index
                     query = "SELECT * FROM weather LIMIT 1 OFFSET ?"
                     cursor.execute(query, (self.weather_index,))
                     result = cursor.fetchone()
@@ -128,9 +137,7 @@ class F1ReplayWindow(arcade.Window):
                 except Exception as e:
                     print(f"Weather Update Error: {e}")
  
-        # increment AFTER the weather check so frame 0 is handled first
         self.global_frame_counter += 1
-
         race_positions = []
 
         # Query each driver's database (Car Updates)
@@ -157,11 +164,9 @@ class F1ReplayWindow(arcade.Window):
                 if result:
                     (x, y, dist, gap, speed, rpm, gear, throttle, brake, drs, lap) = result
                     
-                    # Update map positions using coordinate conversion
                     if pd.notna(x) and pd.notna(y):
                         self.current_car_positions[abbr] = (x, y)
                     
-                    # Update metadata for card-style UI
                     self.driver_metadata[abbr].update({
                         'total_distance': dist,
                         'gap_ahead': gap if gap is not None else 0.0,
@@ -172,13 +177,11 @@ class F1ReplayWindow(arcade.Window):
                     if dist is not None and pd.notna(dist):
                         race_positions.append((abbr, dist))
                     
-                    # Move this specific driver to their next data row
                     self.driver_row_counters[abbr] += 1
                     
             except Exception as e:
                 print(f"Update error for {abbr}: {e}")
 
-        # 4. Re-sort Leaderboard based on total distance covered
         if race_positions:
             race_positions.sort(key=lambda x: x[1], reverse=True)
             self.sorted_drivers = [d[0] for d in race_positions]
@@ -186,24 +189,23 @@ class F1ReplayWindow(arcade.Window):
     def on_draw(self):
         self.clear()
         
-        # Draw Track Layout
-        if self.track_points:
-            try:  
-                leader_lap = self.driver_metadata.get(self.sorted_drivers[0], {}).get('lap_number', 0)
-                draw_track(self.track_points,  self.sorted_drivers, leader_lap, self.db_path)
-            except Exception as e:
-                print(f"Skipping track draw due to error: {e}")
-        
-        # Draw Corners
-        if self.corner_data:
-            try:
-                draw_corners(self.corner_data, self.rotation, self.track_scale, self.offset_x, self.offset_y)
-            except Exception as e:
-                print(f"Skipping corner draw due to error: {e}")
-                
-        # Draw Driver Circles (The "Cars") 
-        if self.selected_driver is None: 
-            # Draw All Drivers
+        try:  
+            leader_lap = self.driver_metadata.get(self.sorted_drivers[0], {}).get('lap_number', 0)
+        except Exception as e:
+            leader_lap = 0
+            print(f"Skipping track draw due to error: {e}") 
+                    
+        if self.selected_driver is None:  
+            
+            # Draw Corners
+            if self.corner_data:
+                try:
+                    draw_corners(self.corner_data, self.rotation, self.track_scale, self.offset_x, self.offset_y)
+                except Exception as e:
+                    print(f"Skipping corner draw due to error: {e}")
+             
+            draw_track(self.fx, self.fy, self.sorted_drivers, leader_lap, self.db_path, scale=1.0)
+                     
             for abbr in self.sorted_drivers:
                 pos = self.current_car_positions.get(abbr)
                 if pos is None or pos == (0, 0):
@@ -216,17 +218,28 @@ class F1ReplayWindow(arcade.Window):
                 color = self.car_colors.get(abbr, arcade.color.GRAY)
                 arcade.draw_circle_filled(fx, fy, 8, color)
                 arcade.draw_text(abbr, fx + 12, fy, arcade.color.WHITE, 10, bold=True, anchor_y="center")
-        else:
-            # Draw the Selected Driver
+                 
+            self.leaderboard_hitboxes = draw_leaderboard(
+                self.sorted_drivers, 
+                self.driver_metadata, 
+                self.car_colors, 
+                self.height
+            )
+            
+        else: 
             abbr = self.selected_driver
             pos = self.current_car_positions.get(abbr)
             
-            if pos is not None and pos != (0, 0):
+            if pos is not None and pos != (0, 0): 
+                active_scale = self.track_scale_focused 
+
+                # Draw Selected Driver Dot
                 fx, fy = get_screen_coords(
                     pos[0], pos[1],
-                    self.rotation, self.track_scale, self.offset_x, self.offset_y
+                    self.rotation, active_scale, self.foc_offset_x, self.foc_offset_y
                 )
                 color = self.car_colors.get(abbr, arcade.color.GRAY)
+                
                 try: 
                     rank = self.sorted_drivers.index(abbr) + 1
                     rank_text = f"P{rank}"
@@ -235,47 +248,40 @@ class F1ReplayWindow(arcade.Window):
                  
                 arcade.draw_circle_filled(fx, fy, 10, color)  
                 arcade.draw_circle_outline(fx, fy, 13, arcade.color.WHITE, 2) 
-                
-                arcade.draw_text(
-                    f"{abbr} [{rank_text}]", 
-                    fx + 18, fy, 
-                    arcade.color.WHITE, 12, bold=True, anchor_y="center"
-                )
-        # Draw Leaderboard
-        self.leaderboard_hitboxes = draw_leaderboard(
-            self.sorted_drivers, 
-            self.driver_metadata, 
-            self.car_colors, 
-            self.height
-        )
+                arcade.draw_text(f"{abbr} [{rank_text}]", fx + 18, fy, arcade.color.WHITE, 12, bold=True, anchor_y="center")
+                      
+                if self.raw_x is not None and self.raw_y is not None:
+                    track_fx, track_fy = get_screen_coords(
+                        self.raw_x, self.raw_y,
+                        self.rotation, active_scale, self.foc_offset_x, self.foc_offset_y
+                    ) 
+                    draw_track(track_fx, track_fy, self.sorted_drivers, leader_lap, self.db_path, scale=1.0)
+                    
+        # Draw Lap Number
         try:
             total_laps = int(self.results_df['Laps'].max()) if self.results_df is not None else 0
         except (ValueError, TypeError):
             total_laps = 0
         draw_lap_number(self.sorted_drivers, self.driver_metadata, self.width, self.height, int(total_laps))
         
-        # Draw Weather Card (Last Layer) 
+        # Draw Weather Card 
         if self.current_weather is not None:
             draw_weather_card(self.current_weather, self.width, self.height)
 
     def on_mouse_press(self, x, y, button, modifiers):
         if button == arcade.MOUSE_BUTTON_LEFT:
             hitboxes = getattr(self, "leaderboard_hitboxes", []) or []
-            
-            # Check if we hit a driver
+             
             for box in hitboxes:
                 if box["left"] <= x <= box["right"] and box["bottom"] <= y <= box["top"]:
                     print(f"Selecting Driver: {box['driver']}")
                     self.selected_driver = box['driver']
-                    return 
-            
-            self.selected_driver = None   # If clicks outside then will move back to None
+                    return   
+                
+            print("Clicked empty area. Resetting to full track view.")
+            self.selected_driver = None
             
 def main(delete_on_exit=True):
-    """
-    Main entry point for the F1 Replay Visualizer.
-    :param delete_on_exit: If True, wipes .db files upon closing.  
-    """
     window = None
     try: 
         window = F1ReplayWindow()

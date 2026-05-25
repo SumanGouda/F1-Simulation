@@ -3,6 +3,7 @@ import arcade
 import math
 import os
 import sqlite3
+import numpy as np
 
 def draw_leaderboard(sorted_drivers, driver_metadata, car_colors, screen_height):
     # Moved start_y down from -70 to -120 to 'drag' it down the screen
@@ -243,10 +244,22 @@ def draw_weather_card(weather_row, screen_width, screen_height):
         arcade.draw_text(f"Hum: {weather_row['Humidity']}%", left_align, row2_y, arcade.color.WHITE, font_size)
         arcade.draw_text(f"Wnd: {weather_row['WindSpeed']}m/s", mid_point, row2_y, arcade.color.WHITE, font_size)
    
-def draw_track(track_points, drv, current_lap, db_root):
-    if track_points is None:
+def draw_track(fx, fy, drv, current_lap, db_root, scale=1.0):
+    if fx is None or fy is None:
         return
-    db_path =  f"{db_root}/race_data.db"
+
+    # Combine the fx and fy numpy arrays into coordinate pairs
+    track_points = np.column_stack((fx, fy))
+
+    if scale != 1.0:
+        cx = sum(p[0] for p in track_points) / len(track_points)
+        cy = sum(p[1] for p in track_points) / len(track_points)
+        track_points = [
+            (cx + (p[0] - cx) * scale, cy + (p[1] - cy) * scale)
+            for p in track_points
+        ]
+
+    db_path = f"{db_root}/race_data.db"
     
     if not hasattr(draw_track, "current_status"):
         draw_track.current_status = "1"
@@ -257,19 +270,16 @@ def draw_track(track_points, drv, current_lap, db_root):
             leader = drv[0]
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
-            
             query = "SELECT TrackStatus FROM laps WHERE Driver = ? AND LapNumber = ?"
             cursor.execute(query, (leader, current_lap))
             result = cursor.fetchone()
-            
             if result:
                 draw_track.current_status = str(result[0])
                 draw_track.last_checked_lap = current_lap
-            
             conn.close()
         except Exception as e:
             print(f"Database injection error: {e}")
- 
+
     status_colors = {
         '1': arcade.color.WHITE,
         '2': arcade.color.YELLOW,
@@ -278,9 +288,9 @@ def draw_track(track_points, drv, current_lap, db_root):
         '6': arcade.color.VIVID_VIOLET,
         '7': arcade.color.RED
     }
-    priority_order = ['5', '4', '6', '7', '2', '1'] 
-    
-    color = arcade.color.ASH_GREY  # fallback
+    priority_order = ['5', '4', '6', '7', '2', '1']
+
+    color = arcade.color.ASH_GREY
     for code in priority_order:
         if code in draw_track.current_status:
             color = status_colors[code]
