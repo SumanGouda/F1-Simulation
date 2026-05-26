@@ -7,7 +7,7 @@ import warnings
 warnings.filterwarnings("ignore")
 import pandas as pd
 import numpy as np
-from rendering.ui_renderer import draw_leaderboard, draw_lap_number, draw_corners, draw_weather_card, draw_track
+from rendering.ui_renderer import draw_leaderboard, draw_lap_number, draw_corners, draw_weather_card, draw_track, draw_tel
 from core.data_exporter import DataExporter
 from core.session_manager import SessionManager
 from core.telemetry_processor import TelemetryProcessor
@@ -226,14 +226,16 @@ class F1ReplayWindow(arcade.Window):
                 self.height
             )
             
-        else: 
+            rank_text = "P??"
+                 
+        else:  
             abbr = self.selected_driver
             pos = self.current_car_positions.get(abbr)
             
+            # 1. Focused Car View with Telemetry Overlay
             if pos is not None and pos != (0, 0): 
                 active_scale = self.track_scale_focused 
-
-                # Draw Selected Driver Dot
+ 
                 fx, fy = get_screen_coords(
                     pos[0], pos[1],
                     self.rotation, active_scale, self.foc_offset_x, self.foc_offset_y
@@ -249,13 +251,101 @@ class F1ReplayWindow(arcade.Window):
                 arcade.draw_circle_filled(fx, fy, 10, color)  
                 arcade.draw_circle_outline(fx, fy, 13, arcade.color.WHITE, 2) 
                 arcade.draw_text(f"{abbr} [{rank_text}]", fx + 18, fy, arcade.color.WHITE, 12, bold=True, anchor_y="center")
-                      
+                     
+                # 2. Track Layout  
                 if self.raw_x is not None and self.raw_y is not None:
                     track_fx, track_fy = get_screen_coords(
                         self.raw_x, self.raw_y,
                         self.rotation, active_scale, self.foc_offset_x, self.foc_offset_y
                     ) 
                     draw_track(track_fx, track_fy, self.sorted_drivers, leader_lap, self.db_path, scale=1.0)
+
+                # 3. Query Live Database for the CURRENT LAP stream only
+                db_file = os.path.join(self.db_path, f"{abbr}.db")
+                hist_speed = None
+                hist_brake = None
+                hist_throttle = None
+                hist_rpm = None
+                max_lap_rows = 1000 
+                
+                if os.path.exists(db_file):
+                    try:
+                        current_frame = self.driver_row_counters.get(abbr, 0)
+                        current_lap = self.driver_metadata[abbr].get('lap_number', 1)
+                        
+                        conn = sqlite3.connect(db_file)
+                        cursor = conn.cursor()
+                        
+                        # A. First, find out exactly at what global row index this current lap started
+                        cursor.execute("SELECT MIN(rowid) FROM telemetry WHERE lap_number = ?", (current_lap,))
+                        lap_start_row = cursor.fetchone()[0]
+                        
+                        if lap_start_row is not None:
+                            # B. Calculate how many frames have played inside THIS specific lap
+                            relative_lap_frame = max(1, current_frame - lap_start_row + 1)
+                            
+                            # C. Fetch total rows available for this lap to lock the X-axis scale
+                            cursor.execute("SELECT COUNT(*) FROM telemetry WHERE lap_number = ?", (current_lap,))
+                            max_lap_rows = max(2, cursor.fetchone()[0])
+                            
+                            # D. Fetch all telemetry fields in a single query matching our relative position
+                            query = """
+                                SELECT speed, brake, throttle, rpm FROM telemetry 
+                                WHERE lap_number = ? 
+                                ORDER BY rowid ASC 
+                                LIMIT ?
+                            """
+                            cursor.execute(query, (current_lap, relative_lap_frame))
+                            rows = cursor.fetchall()
+                            
+                            if rows:
+                                # Convert each data column cleanly into its dedicated numpy tracking array
+                                hist_speed = np.array([r[0] for r in rows if r[0] is not None])
+                                hist_brake = np.array([r[1] for r in rows if r[1] is not None])
+                                hist_throttle = np.array([r[2] for r in rows if r[2] is not None])
+                                hist_rpm = np.array([r[3] for r in rows if r[3] is not None])
+                                
+                        conn.close()
+                    except Exception as e:
+                        print(f"Error reading live lap telemetry streams for {abbr}: {e}")
+
+                start_x = 50
+                chart_w = 700  
+                chart_h = 150 
+
+                # SPEED 
+                if hist_speed is not None and len(hist_speed) >= 2:
+                    draw_tel(
+                        telemetry_data=hist_speed, max_rows=max_lap_rows,
+                        origin_x=start_x, origin_y=700, plot_width=chart_w, plot_height=chart_h,
+                        color=color, title=f"Speed (Lap {current_lap})", max_val=380.0
+                    )
+
+                # RPM 
+                if hist_rpm is not None and len(hist_rpm) >= 2:
+                    draw_tel(
+                        telemetry_data=hist_rpm, max_rows=max_lap_rows,
+                        origin_x=start_x, origin_y=520, plot_width=chart_w, plot_height=chart_h,
+                        color=arcade.color.LIGHT_GOLDENROD_YELLOW, title="RPM", max_val=13000.0
+                    )
+
+                # THROTTLE 
+                if hist_throttle is not None and len(hist_throttle) >= 2: 
+                    max_t = 100.0 if max(hist_throttle) > 1.1 else 1.0
+                    draw_tel(
+                        telemetry_data=hist_throttle, max_rows=max_lap_rows,
+                        origin_x=start_x, origin_y=340, plot_width=chart_w, plot_height=chart_h,
+                        color=arcade.color.GREEN, title="Throttle Input", max_val=max_t
+                    )
+
+                # 4. BRAKE  
+                if hist_brake is not None and len(hist_brake) >= 2:
+                    max_b = 100.0 if max(hist_brake) > 1.1 else 1.0
+                    draw_tel(
+                        telemetry_data=hist_brake, max_rows=max_lap_rows,
+                        origin_x=start_x, origin_y=160, plot_width=chart_w, plot_height=chart_h,
+                        color=arcade.color.RED, title="Brake Input", max_val=max_b
+                    )
                     
         # Draw Lap Number
         try:

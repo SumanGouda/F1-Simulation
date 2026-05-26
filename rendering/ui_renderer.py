@@ -298,4 +298,64 @@ def draw_track(fx, fy, drv, current_lap, db_root, scale=1.0):
 
     arcade.draw_line_strip(track_points, color, 6)
     arcade.draw_line_strip(track_points, arcade.color.BLACK, 3)
-  
+
+def draw_tel(telemetry_data, max_rows, origin_x, origin_y, plot_width, plot_height, color, title="SPEED", max_val=350.0):
+    """
+    Draws a telemetry line chart directly onto the Arcade window with a centered top heading
+    and min, mid, and max Y-axis value indicators.
+    """
+    if telemetry_data is None or len(telemetry_data) < 2:
+        return
+          
+    indices = np.arange(len(telemetry_data))
+    screen_x = origin_x + (indices / (max_rows - 1)) * plot_width
+       
+    screen_y = origin_y + (telemetry_data / max_val) * plot_height 
+    
+    chart_points = np.column_stack((screen_x, screen_y))
+       
+    arcade.draw_rect_outline(
+        arcade.XYWH(origin_x + plot_width/2, origin_y + plot_height/2, plot_width, plot_height),
+        color=arcade.color.DARK_SLATE_GRAY,
+        border_width=1
+    )  
+    arcade.draw_text(
+        title,
+        origin_x + (plot_width / 2),
+        origin_y + plot_height + 12,
+        arcade.color.WHITE,
+        font_size=10,
+        bold=True,
+        anchor_x="center",
+        anchor_y="center"
+    ) 
+    label_x = origin_x - 5
+     
+    arcade.draw_text(
+        f"{int(max_val)}",
+        label_x,
+        origin_y + plot_height,
+        arcade.color.ASH_GREY,
+        font_size=10,
+        anchor_x="right",
+        anchor_y="center"
+    ) 
+    arcade.draw_text(
+        f"{int(max_val / 2)}",
+        label_x,
+        origin_y + (plot_height / 2),
+        arcade.color.ASH_GREY,
+        font_size=10,
+        anchor_x="right",
+        anchor_y="center"
+    ) 
+    arcade.draw_text(
+        "0",
+        label_x,
+        origin_y,
+        arcade.color.ASH_GREY,
+        font_size=10,
+        anchor_x="right",
+        anchor_y="center"
+    ) 
+    arcade.draw_line_strip(chart_points, color, 2)
