@@ -7,11 +7,11 @@ import warnings
 warnings.filterwarnings("ignore")
 import pandas as pd
 import numpy as np
-from rendering.ui_renderer import draw_leaderboard, draw_lap_number, draw_corners, draw_weather_card, draw_track, draw_tel
+from rendering.ui_renderer import draw_leaderboard, draw_lap_number, draw_corners, draw_weather_card, draw_track, draw_tel, draw_focused_driver_telemetry
 from core.data_exporter import DataExporter
 from core.session_manager import SessionManager
 from core.telemetry_processor import TelemetryProcessor
-from utils.helpers import prepare_track_layout, get_screen_coords, calculate_weather_frame_ratio, get_max_session_rows 
+from utils.helpers import prepare_track_layout, get_screen_coords, calculate_weather_frame_ratio, get_max_session_rows, hex_to_rgb
 
 # Layout Constants
 SCREEN_WIDTH = 1500
@@ -23,61 +23,110 @@ year = 2025
 GP_NAME = "bahrain"  
 DB_ROOT = f"database/race_{GP_NAME}"
 
-def hex_to_rgb(hex_str):
-    if not hex_str or not isinstance(hex_str, str): return (128, 128, 128)
-    hex_str = hex_str.lstrip('#')
-    return tuple(int(hex_str[i:i+2], 16) for i in (0, 2, 4))
 
 class F1ReplayWindow(arcade.Window):
     def __init__(self):
         super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE)
         arcade.set_background_color(arcade.color.BLACK)
 
+
         # Game State
         self.driver_metadata = {}   
         self.sorted_drivers = []  
         self.corner_data = []
-        self.session_time = 0.0   
-        self.speed_multiplier = 1  
+        self.session_time = 0.0    
         self.is_paused = False
         self.current_race_time = pd.Timedelta(seconds=0) 
         self.current_weather = None
-        self.selected_driver = None
-        
-        # FIX for Bug 2: Explicitly initialize raw coordinate properties
+        self.selected_driver = None 
         self.raw_x = None
         self.raw_y = None
         self.fx = None
         self.fy = None
-        
+
+        self.control_hitboxes = {}
         self.setup()
+        self.btn_icons = {
+            "SLOW":  arcade.load_texture("assets/images/slow.png"),
+            "PAUSE": arcade.load_texture("assets/images/pause.png"),
+            "PLAY":  arcade.load_texture("assets/images/play.png"),
+            "FAST":  arcade.load_texture("assets/images/fast.png"),
+        }
+
+    def _draw_playback_controls(self):
+        btn_w, btn_h = 36, 36
+        gap = 8
+        border = 2
+        center_y = 90
+        left_edge = 20
+
+        buttons = [
+            ("SLOW",  left_edge + btn_w//2),
+            ("PAUSE", left_edge + btn_w + gap + btn_w//2),
+            ("FAST",  left_edge + btn_w*2 + gap*2 + btn_w//2),
+        ]
+
+        hitboxes = {}
+        for name, cx in buttons:
+            if name == "PAUSE":
+                icon_key = "PLAY" if self.is_paused else "PAUSE"
+            else:
+                icon_key = name
+
+            arcade.draw_texture_rect(
+                self.btn_icons[icon_key],
+                arcade.rect.XYWH(cx, center_y, btn_w, btn_h)
+            )
+
+            hitboxes[name] = {
+                "left":   cx - btn_w / 2,
+                "right":  cx + btn_w / 2,
+                "bottom": center_y - btn_h / 2,
+                "top":    center_y + btn_h / 2,
+            }
+
+        self.control_hitboxes = hitboxes
+
+    def _on_slow(self, event):
+        self.race_speed = max(0.5, round(self.race_speed - 0.5, 1))
+        self._refresh_button_labels()
+
+    def _on_pause(self, event):
+        self.is_paused = not self.is_paused
+        self._refresh_button_labels()
+
+    def _on_fast(self, event):
+        self.race_speed = min(5.0, round(self.race_speed + 0.5, 1))
+        self._refresh_button_labels()
+
+    def _refresh_button_labels(self):
+        pass  # Labels are redrawn dynamically each frame
 
     def setup(self):
         # Load the F1 Session
-        self.manager = SessionManager(year=year, gp=GP_NAME.title(), session_type="R")
+        self.session_manager = SessionManager(year=year, gp=GP_NAME.title(), session_type="R")
         
-        if self.manager.session is None:
+        if self.session_manager.session is None:
             print("Failed to load F1 Session.")
             return
 
         # Create the .db files 
-        self.exporter = DataExporter(self.manager)
+        self.exporter = DataExporter(self.session_manager)
         self.exporter.export_all_data()
-        self.db_path = f"database/race_{self.manager.gp.lower()}"
+        gp_clean = self.session_manager.gp.lower()
+        self.db_path = f"database/race_{gp_clean}/{gp_clean}.db"
         
         # Prepare UI Metadata & Layout 
-        self.results_df = self.manager.get_session_results()
+        self.results_df = self.session_manager.get_session_results()
         if self.results_df is not None:
             self.results_df = self.results_df.sort_values(by='GridPosition', na_position='last')
             self.driver_metadata = self.results_df.set_index('Abbreviation').to_dict('index')
             self.sorted_drivers = list(self.driver_metadata.keys())
         
-        self.rotation = self.manager.get_circuit_rotation() or 0
-
-        # Generate the Racing Line and corner
-        self.corner_data = self.manager.get_corner_data()
+        self.rotation = self.session_manager.get_circuit_rotation() or 0
+        self.corner_data = self.session_manager.get_corner_data()
         
-        fastest_lap = self.manager.get_session_fastest_lap()
+        fastest_lap = self.session_manager.get_session_fastest_lap()
         if fastest_lap is not None:
             tp_track = TelemetryProcessor(fastest_lap)
             raw_x, raw_y = tp_track.get_track_coordinates()
@@ -90,15 +139,13 @@ class F1ReplayWindow(arcade.Window):
                         raw_x, raw_y, SCREEN_WIDTH, SCREEN_HEIGHT, 
                         padding_left=320, rotation=self.rotation
                     )            
-                self.track_scale_focused = self.track_scale * 0.30   # For focused view change this parameter
+                self.track_scale_focused = self.track_scale * 0.30
                 self.foc_offset_x = self.offset_x + 300
                 self.foc_offset_y = self.offset_y - 80
  
         self.car_colors = {abbr: hex_to_rgb(info.get('TeamColor', '#FFFFFF')) 
                            for abbr, info in self.driver_metadata.items()}
-
-        # Linear Timing Initialization 
-        self.is_paused = False      
+     
         self.current_car_positions = {abbr: (0, 0) for abbr in self.driver_metadata.keys()}
         self.driver_row_counters = {abbr: 0 for abbr in self.driver_metadata.keys()}
         
@@ -108,84 +155,80 @@ class F1ReplayWindow(arcade.Window):
  
         self.global_frame_counter = 0
         self.weather_index = 0
+        self.race_speed = 1.5
         self.current_weather = None
         
+        self.driver_float_counters = {abbr: 0.0 for abbr in self.driver_metadata.keys()}
         print(f"Setup complete. Weather ratio set to 1:{self.weather_frame_ratio}")
         
     def on_update(self, delta_time):
         if self.is_paused:
             return
-
-        # Weather Update Logic
+ 
         if self.global_frame_counter % self.weather_frame_ratio == 0:
-            weather_db_path = os.path.join(self.db_path, "weather.db")
-            
-            if os.path.exists(weather_db_path):
+            if os.path.exists(self.db_path):
                 try:
-                    conn = sqlite3.connect(weather_db_path)
+                    conn = sqlite3.connect(self.db_path)
                     conn.row_factory = sqlite3.Row 
-                    cursor = conn.cursor()
-                    
-                    query = "SELECT * FROM weather LIMIT 1 OFFSET ?"
-                    cursor.execute(query, (self.weather_index,))
+                    cursor = conn.cursor() 
+                    cursor.execute("SELECT * FROM weather LIMIT 1 OFFSET ?", (int(self.weather_index),))
                     result = cursor.fetchone()
                     conn.close()
 
                     if result:
                         self.current_weather = result
-                        self.weather_index += 1
+                        self.weather_index += self.race_speed
                 except Exception as e:
                     print(f"Weather Update Error: {e}")
  
         self.global_frame_counter += 1
-        race_positions = []
+        race_positions = [] 
+        
+        if os.path.exists(self.db_path):
+            for abbr in self.sorted_drivers:
+                try:
+                    conn = sqlite3.connect(self.db_path)
+                    cursor = conn.cursor()
+                     
+                    self.driver_float_counters[abbr] += self.race_speed
+                    current_row_index = int(self.driver_float_counters[abbr])
+                    
+                    table_name = f"telemetry_{abbr.lower()}"
+                    
+                    query = f"""
+                        SELECT x, y, total_distance, gap_ahead, speed, rpm, ngear, 
+                               throttle, brake, drs, lap_number 
+                        FROM {table_name} LIMIT 1 OFFSET ?
+                    """
+                    cursor.execute(query, (current_row_index,))
+                    result = cursor.fetchone()
+                    conn.close()
 
-        # Query each driver's database (Car Updates)
-        for abbr in self.driver_metadata.keys():
-            db_path = os.path.join(self.db_path, f"{abbr}.db")
-            if not os.path.exists(db_path): 
-                continue
-
-            try:
-                conn = sqlite3.connect(db_path)
-                cursor = conn.cursor()
-                 
-                current_row_index = self.driver_row_counters[abbr]
+                    if result:
+                        (x, y, dist, gap, speed, rpm, gear, throttle, brake, drs, lap) = result
+                        
+                        if pd.notna(x) and pd.notna(y):
+                            self.current_car_positions[abbr] = (x, y)
+                        
+                        self.driver_metadata[abbr].update({
+                            'total_distance': dist,
+                            'gap_ahead': gap if gap is not None else 0.0,
+                            'speed': speed, 'rpm': rpm, 'gear': gear,
+                            'throttle': throttle, 'brake': brake, 'drs': drs, 'lap_number': lap
+                        })
                 
-                query = """
-                    SELECT x, y, total_distance, gap_ahead, speed, rpm, ngear, 
-                           throttle, brake, drs, lap_number 
-                    FROM telemetry LIMIT 1 OFFSET ?
-                """
-                cursor.execute(query, (current_row_index,))
-                result = cursor.fetchone()
-                conn.close()
-
-                if result:
-                    (x, y, dist, gap, speed, rpm, gear, throttle, brake, drs, lap) = result
+                        if dist is not None and pd.notna(dist):
+                            race_positions.append((abbr, dist))
+                        
+                        self.driver_row_counters[abbr] = current_row_index
+                        
+                except Exception as e:
+                    print(f"Update error for table {table_name}: {e}")
                     
-                    if pd.notna(x) and pd.notna(y):
-                        self.current_car_positions[abbr] = (x, y)
-                    
-                    self.driver_metadata[abbr].update({
-                        'total_distance': dist,
-                        'gap_ahead': gap if gap is not None else 0.0,
-                        'speed': speed, 'rpm': rpm, 'gear': gear,
-                        'throttle': throttle, 'brake': brake, 'drs': drs, 'lap_number': lap
-                    })
-            
-                    if dist is not None and pd.notna(dist):
-                        race_positions.append((abbr, dist))
-                    
-                    self.driver_row_counters[abbr] += 1
-                    
-            except Exception as e:
-                print(f"Update error for {abbr}: {e}")
-
         if race_positions:
             race_positions.sort(key=lambda x: x[1], reverse=True)
             self.sorted_drivers = [d[0] for d in race_positions]
-                           
+
     def on_draw(self):
         self.clear()
         
@@ -197,7 +240,6 @@ class F1ReplayWindow(arcade.Window):
                     
         if self.selected_driver is None:  
             
-            # Draw Corners
             if self.corner_data:
                 try:
                     draw_corners(self.corner_data, self.rotation, self.track_scale, self.offset_x, self.offset_y)
@@ -225,128 +267,12 @@ class F1ReplayWindow(arcade.Window):
                 self.car_colors, 
                 self.height
             )
-            
-            rank_text = "P??"
                  
         else:  
-            abbr = self.selected_driver
-            pos = self.current_car_positions.get(abbr)
-            
-            # 1. Focused Car View with Telemetry Overlay
-            if pos is not None and pos != (0, 0): 
-                active_scale = self.track_scale_focused 
- 
-                fx, fy = get_screen_coords(
-                    pos[0], pos[1],
-                    self.rotation, active_scale, self.foc_offset_x, self.foc_offset_y
-                )
-                color = self.car_colors.get(abbr, arcade.color.GRAY)
-                
-                try: 
-                    rank = self.sorted_drivers.index(abbr) + 1
-                    rank_text = f"P{rank}"
-                except ValueError:
-                    rank_text = "P??"
-                 
-                arcade.draw_circle_filled(fx, fy, 10, color)  
-                arcade.draw_circle_outline(fx, fy, 13, arcade.color.WHITE, 2) 
-                arcade.draw_text(f"{abbr} [{rank_text}]", fx + 18, fy, arcade.color.WHITE, 12, bold=True, anchor_y="center")
-                     
-                # 2. Track Layout  
-                if self.raw_x is not None and self.raw_y is not None:
-                    track_fx, track_fy = get_screen_coords(
-                        self.raw_x, self.raw_y,
-                        self.rotation, active_scale, self.foc_offset_x, self.foc_offset_y
-                    ) 
-                    draw_track(track_fx, track_fy, self.sorted_drivers, leader_lap, self.db_path, scale=1.0)
-
-                # 3. Query Live Database for the CURRENT LAP stream only
-                db_file = os.path.join(self.db_path, f"{abbr}.db")
-                hist_speed = None
-                hist_brake = None
-                hist_throttle = None
-                hist_rpm = None
-                max_lap_rows = 1000 
-                
-                if os.path.exists(db_file):
-                    try:
-                        current_frame = self.driver_row_counters.get(abbr, 0)
-                        current_lap = self.driver_metadata[abbr].get('lap_number', 1)
-                        
-                        conn = sqlite3.connect(db_file)
-                        cursor = conn.cursor()
-                        
-                        # A. First, find out exactly at what global row index this current lap started
-                        cursor.execute("SELECT MIN(rowid) FROM telemetry WHERE lap_number = ?", (current_lap,))
-                        lap_start_row = cursor.fetchone()[0]
-                        
-                        if lap_start_row is not None:
-                            # B. Calculate how many frames have played inside THIS specific lap
-                            relative_lap_frame = max(1, current_frame - lap_start_row + 1)
-                            
-                            # C. Fetch total rows available for this lap to lock the X-axis scale
-                            cursor.execute("SELECT COUNT(*) FROM telemetry WHERE lap_number = ?", (current_lap,))
-                            max_lap_rows = max(2, cursor.fetchone()[0])
-                            
-                            # D. Fetch all telemetry fields in a single query matching our relative position
-                            query = """
-                                SELECT speed, brake, throttle, rpm FROM telemetry 
-                                WHERE lap_number = ? 
-                                ORDER BY rowid ASC 
-                                LIMIT ?
-                            """
-                            cursor.execute(query, (current_lap, relative_lap_frame))
-                            rows = cursor.fetchall()
-                            
-                            if rows:
-                                # Convert each data column cleanly into its dedicated numpy tracking array
-                                hist_speed = np.array([r[0] for r in rows if r[0] is not None])
-                                hist_brake = np.array([r[1] for r in rows if r[1] is not None])
-                                hist_throttle = np.array([r[2] for r in rows if r[2] is not None])
-                                hist_rpm = np.array([r[3] for r in rows if r[3] is not None])
-                                
-                        conn.close()
-                    except Exception as e:
-                        print(f"Error reading live lap telemetry streams for {abbr}: {e}")
-
-                start_x = 50
-                chart_w = 700  
-                chart_h = 150 
-
-                # SPEED 
-                if hist_speed is not None and len(hist_speed) >= 2:
-                    draw_tel(
-                        telemetry_data=hist_speed, max_rows=max_lap_rows,
-                        origin_x=start_x, origin_y=700, plot_width=chart_w, plot_height=chart_h,
-                        color=color, title=f"Speed (Lap {current_lap})", max_val=380.0
-                    )
-
-                # RPM 
-                if hist_rpm is not None and len(hist_rpm) >= 2:
-                    draw_tel(
-                        telemetry_data=hist_rpm, max_rows=max_lap_rows,
-                        origin_x=start_x, origin_y=520, plot_width=chart_w, plot_height=chart_h,
-                        color=arcade.color.LIGHT_GOLDENROD_YELLOW, title="RPM", max_val=13000.0
-                    )
-
-                # THROTTLE 
-                if hist_throttle is not None and len(hist_throttle) >= 2: 
-                    max_t = 100.0 if max(hist_throttle) > 1.1 else 1.0
-                    draw_tel(
-                        telemetry_data=hist_throttle, max_rows=max_lap_rows,
-                        origin_x=start_x, origin_y=340, plot_width=chart_w, plot_height=chart_h,
-                        color=arcade.color.GREEN, title="Throttle Input", max_val=max_t
-                    )
-
-                # 4. BRAKE  
-                if hist_brake is not None and len(hist_brake) >= 2:
-                    max_b = 100.0 if max(hist_brake) > 1.1 else 1.0
-                    draw_tel(
-                        telemetry_data=hist_brake, max_rows=max_lap_rows,
-                        origin_x=start_x, origin_y=160, plot_width=chart_w, plot_height=chart_h,
-                        color=arcade.color.RED, title="Brake Input", max_val=max_b
-                    )
-                    
+            draw_focused_driver_telemetry(
+                self, leader_lap, get_screen_coords, draw_track, draw_tel
+            )       
+        
         # Draw Lap Number
         try:
             total_laps = int(self.results_df['Laps'].max()) if self.results_df is not None else 0
@@ -358,10 +284,25 @@ class F1ReplayWindow(arcade.Window):
         if self.current_weather is not None:
             draw_weather_card(self.current_weather, self.width, self.height)
 
+        # Draw playback controls (always on top)
+        self._draw_playback_controls()
+
     def on_mouse_press(self, x, y, button, modifiers):
         if button == arcade.MOUSE_BUTTON_LEFT:
+
+            # Check playback control buttons first
+            for name, box in self.control_hitboxes.items():
+                if box["left"] <= x <= box["right"] and box["bottom"] <= y <= box["top"]:
+                    if name == "SLOW":
+                        self._on_slow(None)
+                    elif name == "PAUSE":
+                        self._on_pause(None)
+                    elif name == "FAST":
+                        self._on_fast(None)
+                    return
+
+            # Check leaderboard hitboxes
             hitboxes = getattr(self, "leaderboard_hitboxes", []) or []
-             
             for box in hitboxes:
                 if box["left"] <= x <= box["right"] and box["bottom"] <= y <= box["top"]:
                     print(f"Selecting Driver: {box['driver']}")
@@ -370,7 +311,8 @@ class F1ReplayWindow(arcade.Window):
                 
             print("Clicked empty area. Resetting to full track view.")
             self.selected_driver = None
-            
+
+
 def main(delete_on_exit=True):
     window = None
     try: 

@@ -3,6 +3,11 @@ import numpy as np
 import sqlite3
 import os
 
+def hex_to_rgb(hex_str):
+    if not hex_str or not isinstance(hex_str, str): return (128, 128, 128)
+    hex_str = hex_str.lstrip('#')
+    return tuple(int(hex_str[i:i+2], 16) for i in (0, 2, 4))
+
 def get_screen_coords(x, y, rotation, track_scale, offset_x, offset_y):
     # 1. Rotate 
     rad = np.radians(rotation)
@@ -65,8 +70,6 @@ def get_max_session_rows(driver_abbrs, db_root):
         conn.close()
     
     return max_rows
-
-import numpy as np
 
 def prepare_track_layout(raw_x, raw_y, screen_width, screen_height, padding_left, rotation):
     """Fits the track perfectly within the available screen space."""

@@ -1,8 +1,14 @@
 import fastf1
+import os
 
+local_cache_dir = os.path.join(os.getcwd(), "fastf1_cache")
+if not os.path.exists(local_cache_dir):
+    os.makedirs(local_cache_dir)
+
+# Tell FastF1 to look inside the local folder
+fastf1.Cache.enable_cache(local_cache_dir)
 
 class SessionManager:
-
     def __init__(self, year, gp, session_type):
         self.session = None
         self.year = year           
