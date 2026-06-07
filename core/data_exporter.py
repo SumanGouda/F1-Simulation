@@ -9,14 +9,14 @@ class DataExporter:
     def __init__(self, session_manager):
         self.sm = session_manager  
         self.gp = self.sm.gp.lower()
-        self.base_path = f"database/race_{self.gp}" 
+        self.base_path = f"database/race_{self.gp}_{self.sm.year}"
         
         if not os.path.exists(self.base_path):
             os.makedirs(self.base_path)
 
     def __export_driver_tel(self, driver_abbr):
         # Path to the unified grand prix database file
-        db_path = os.path.join(self.base_path, f"{self.gp}.db")
+        db_path = os.path.join(self.base_path, f"{self.gp}_{self.sm.year}.db")
         table_name = f"telemetry_{driver_abbr.lower()}"
         
         conn = sqlite3.connect(db_path)
@@ -85,7 +85,7 @@ class DataExporter:
            
     def __export_weather(self):
         """Exports session weather data to a dedicated table inside the main database."""
-        db_path = os.path.join(self.base_path, f"{self.gp}.db")
+        db_path = os.path.join(self.base_path, f"{self.gp}_{self.sm.year}.db")
         table_name = "weather"
         
         conn = sqlite3.connect(db_path)
@@ -118,7 +118,7 @@ class DataExporter:
 
     def __export_race_data(self): 
         """Exports consolidated race laps data to a dedicated table inside the main database."""
-        db_path = os.path.join(self.base_path, f"{self.gp}.db")
+        db_path = os.path.join(self.base_path, f"{self.gp}_{self.sm.year}.db")
         table_name = "laps"
         
         conn = sqlite3.connect(db_path)

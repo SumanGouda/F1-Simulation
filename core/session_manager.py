@@ -145,4 +145,11 @@ class SessionManager:
             print(f"Error retrieving corner data: {e}")
             return None
 
+def get_season_gp_list(year):
+    try:
+        schedule = fastf1.get_event_schedule(year, include_testing=False)
+        return schedule['Location'].tolist()
+    except Exception as e:
+        print(f"Error retrieving season schedule for {year}: {e}")
+        return []
     

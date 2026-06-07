@@ -275,7 +275,7 @@ def draw_track(fx, fy, drv, current_lap, db_root, scale=1.0):
     arcade.draw_line_strip(track_points, arcade.color.BLACK, 3)
 
 
-def draw_focused_driver_telemetry(app, leader_lap, get_screen_coords, draw_track, draw_tel, box_geometry=(50, 160, 750, 500)):
+def draw_focused_driver_telemetry(app, leader_lap, get_screen_coords, draw_track, draw_tel, box_geometry=(50, 160, 900, 500)):
     """
     Renders the focused car view, track layout, and queries/draws real-time 
     telemetry charts for the selected driver inside a customizable bounding box.
@@ -372,31 +372,46 @@ def draw_focused_driver_telemetry(app, leader_lap, get_screen_coords, draw_track
         max_t = 100.0 if (hist_throttle is not None and len(hist_throttle) > 0 and max(hist_throttle) > 1.1) else 1.0
         max_b = 100.0 if (hist_brake    is not None and len(hist_brake)    > 0 and max(hist_brake)    > 1.1) else 1.0
 
-        datasets = [
-            {"data": hist_speed,    "max": 380.0,   "color": color},
-            {"data": hist_rpm,      "max": 13000.0, "color": arcade.color.LIGHT_GOLDENROD_YELLOW},
-            {"data": hist_throttle, "max": max_t,   "color": arcade.color.GREEN},
-            {"data": hist_brake,    "max": max_b,   "color": arcade.color.RED}
+        solo_datasets = [
+            {"data": hist_speed, "max": 380.0,   "color": color},
+            {"data": hist_rpm,   "max": 13000.0, "color": arcade.color.LIGHT_GOLDENROD_YELLOW},
         ]
 
-        section_h      = (box_h - 20) / 4  
-        plot_left_pad  = 60 
-        plot_right_pad = 20  
+        section_h      = (box_h - 20) / 3   # 3 sections : speed, rpm, throttle+brake
+        plot_left_pad  = 60
+        plot_right_pad = 20
 
-        for i, target in enumerate(datasets):
+        for i, target in enumerate(solo_datasets):
             if target["data"] is not None and len(target["data"]) >= 2:
-                section_y = box_y + (i * section_h) + 5
-                
+                section_y = box_y + ((i + 1) * section_h) + 5 
                 draw_tel(
-                    telemetry_data=target["data"], 
+                    telemetry_data=target["data"],
                     max_rows=max_lap_rows,
-                    origin_x=box_x + plot_left_pad,  
-                    origin_y=section_y, 
-                    plot_width=box_w - plot_left_pad - plot_right_pad, 
-                    plot_height=section_h - 15, 
-                    color=target["color"], 
-                    title="", 
+                    origin_x=box_x + plot_left_pad,
+                    origin_y=section_y,
+                    plot_width=box_w - plot_left_pad - plot_right_pad,
+                    plot_height=section_h - 15,
+                    color=target["color"],
+                    title="",
                     max_val=target["max"]
+                )
+ 
+        overlay_section_y = box_y + (0 * section_h) + 20
+        for data, col, mx in [
+            (hist_throttle, arcade.color.GREEN, max_t),
+            (hist_brake,    arcade.color.RED,   max_b),
+        ]:
+            if data is not None and len(data) >= 2:
+                draw_tel(
+                    telemetry_data=data,
+                    max_rows=max_lap_rows,
+                    origin_x=box_x + plot_left_pad,
+                    origin_y=overlay_section_y,
+                    plot_width=box_w - plot_left_pad - plot_right_pad,
+                    plot_height=section_h - 15,
+                    color=col,
+                    title="",
+                    max_val=mx
                 )
 
                                         

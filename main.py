@@ -7,9 +7,10 @@ import warnings
 warnings.filterwarnings("ignore")
 import pandas as pd
 import numpy as np
+from rendering.selection_dialog import get_race_selection
 from rendering.ui_renderer import draw_leaderboard, draw_lap_number, draw_corners, draw_weather_card, draw_track, draw_tel, draw_focused_driver_telemetry
 from core.data_exporter import DataExporter
-from core.session_manager import SessionManager
+from core.session_manager import SessionManager, get_season_gp_list
 from core.telemetry_processor import TelemetryProcessor
 from utils.helpers import prepare_track_layout, get_screen_coords, calculate_weather_frame_ratio, get_max_session_rows, hex_to_rgb
 
@@ -18,16 +19,13 @@ SCREEN_WIDTH = 1500
 SCREEN_HEIGHT = 900
 SCREEN_TITLE = "F1 Race Replay - Arcade Edition"
 
-# Configuration
-year = 2025
-GP_NAME = "bahrain"  
-DB_ROOT = f"database/race_{GP_NAME}"
-
-
 class F1ReplayWindow(arcade.Window):
-    def __init__(self):
-        super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE)
+    def __init__(self, year, gp_name):
+        super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT)
+        self.set_caption(SCREEN_TITLE)
         arcade.set_background_color(arcade.color.BLACK)
+        self.year = year
+        self.gp_name = gp_name.lower()
 
 
         # Game State
@@ -104,7 +102,7 @@ class F1ReplayWindow(arcade.Window):
 
     def setup(self):
         # Load the F1 Session
-        self.session_manager = SessionManager(year=year, gp=GP_NAME.title(), session_type="R")
+        self.session_manager = SessionManager(year=self.year, gp=self.gp_name.title(), session_type="R")
         
         if self.session_manager.session is None:
             print("Failed to load F1 Session.")
@@ -114,7 +112,7 @@ class F1ReplayWindow(arcade.Window):
         self.exporter = DataExporter(self.session_manager)
         self.exporter.export_all_data()
         gp_clean = self.session_manager.gp.lower()
-        self.db_path = f"database/race_{gp_clean}/{gp_clean}.db"
+        self.db_path = f"database/race_{gp_clean}_{self.year}/{gp_clean}_{self.year}.db"
         
         # Prepare UI Metadata & Layout 
         self.results_df = self.session_manager.get_session_results()
@@ -313,10 +311,15 @@ class F1ReplayWindow(arcade.Window):
             self.selected_driver = None
 
 
-def main(delete_on_exit=True):
+def main(delete_on_exit=True): 
+    year, gp = get_race_selection()
+    if year is None or gp is None:
+        print("No selection made. Exiting.")
+        return
+
     window = None
     try: 
-        window = F1ReplayWindow()
+        window = F1ReplayWindow(year=year, gp_name=gp)
         arcade.run()
     except Exception as e: 
         print(f"An unexpected error occurred: {e}")
@@ -324,7 +327,7 @@ def main(delete_on_exit=True):
         if delete_on_exit and window and hasattr(window, 'exporter'):
             print("Cleaning up database files before exit as requested...")  
         else:
-            print("Persistence mode: Database files preserved for next run.")  
+            print("Persistence mode: Database files preserved for next run.") 
 
 if __name__ == "__main__": 
     main(delete_on_exit=False)
