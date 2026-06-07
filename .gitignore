@@ -1,33 +1,25 @@
-# --- Python Environment ---
-venv/
-.env
+# Virtual Environment
+.venv/
+
+# Database files
+database/
+
+# FastF1 Cache
+fastf1_cache/
+
+# Python
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
 
-# --- FastF1 & Data Caches ---
+# Cache folder
 cache/
-f1_visualizer/cache/
-data/
 
-# --- Databases (Telemetry Project) ---
-# We ignore these because they are generated dynamically [cite: 2026-03-07]
-database/
-*.db
-*.sqlite
+# OS
+.DS_Store
+Thumbs.db
 
-# --- IDE & Editor Specific ---
+# IDE
 .vscode/
 .idea/
-.cursor/
-
-# --- Notebooks & Analysis ---
-.ipynb_checkpoints/
-
-# --- Webpage (Desktop) ---
-node_modules/
-dist/
-.DS_Store
-
-# --- OS Specific ---
-Thumbs.db
-desktop.ini
