@@ -1,7 +1,7 @@
 import fastf1
 import os
 
-local_cache_dir = os.path.join(os.getcwd(), "fastf1_cache")
+local_cache_dir = os.path.join(os.getcwd(), "cache")
 if not os.path.exists(local_cache_dir):
     os.makedirs(local_cache_dir)
 
