@@ -4,10 +4,9 @@ import os
 import sqlite3
 import numpy as np
 
-
 def draw_leaderboard(sorted_drivers, driver_metadata, car_colors, screen_height):
     start_x, start_y = 130, screen_height - 120 
-    box_width = 240
+    box_width = 190          # reduced from 240
     box_height = 28
     spacing = 32
     border_thickness = 3
@@ -19,12 +18,10 @@ def draw_leaderboard(sorted_drivers, driver_metadata, car_colors, screen_height)
         color = car_colors.get(abbr, arcade.color.GRAY)
         curr_y = start_y - (i * spacing)
         
-        # Border (Team Color)
         arcade.draw_rect_filled(
             arcade.rect.XYWH(start_x, curr_y, box_width, box_height), 
             color
         )
-        # Inner Fill (Solid Black)
         arcade.draw_rect_filled(
             arcade.rect.XYWH(
                 start_x, curr_y, 
@@ -34,7 +31,6 @@ def draw_leaderboard(sorted_drivers, driver_metadata, car_colors, screen_height)
             arcade.color.BLACK
         )
 
-        # Gap Logic
         if i == 0:
             gap_display = "INTERVAL"
         else:
@@ -50,12 +46,12 @@ def draw_leaderboard(sorted_drivers, driver_metadata, car_colors, screen_height)
         
         arcade.draw_text(
             f"{i+1}  {abbr}", 
-            start_x - 110, curr_y, 
+            start_x - 85, curr_y,             # adjusted from -110 to fit narrower box
             arcade.color.WHITE, 12, bold=True, anchor_y="center"
         )
         arcade.draw_text(
             gap_display, 
-            start_x + 110, curr_y, 
+            start_x + 85, curr_y,              # adjusted from +110
             arcade.color.WHITE, 11, bold=True, anchor_x="right", anchor_y="center"
         )
         hitboxes.append({
@@ -68,50 +64,28 @@ def draw_leaderboard(sorted_drivers, driver_metadata, car_colors, screen_height)
         
     return hitboxes
 
-
 def draw_lap_number(sorted_drivers, driver_metadata, screen_width, screen_height, total_laps): 
-    start_x = screen_width - 80
-    start_y = screen_height - 75
-    
-    box_width = 80
-    box_height = 50  
-    border_thickness = 3
-    
     if not sorted_drivers:
         return
-        
+         
     lead_abbr = sorted_drivers[0]
     meta = driver_metadata.get(lead_abbr, {}) 
     lap_number = int(meta.get('lap_number', 1))
-    
-    arcade.draw_rect_filled(
-        arcade.rect.XYWH(start_x, start_y, box_width, box_height), 
-        arcade.color.WHITE
-    )
-    arcade.draw_rect_filled(
-        arcade.rect.XYWH(
-            start_x, start_y, 
-            box_width - border_thickness, 
-            box_height - border_thickness
-        ), 
-        arcade.color.BLACK
-    )
+     
+    box_width = 190   # matches leaderboard's box_width
+    text_x = 130 - (box_width / 2)   # leaderboard's left edge
+    text_y = screen_height - 90
+    font_size = 14
 
     arcade.draw_text(
-        f"{lap_number} / {total_laps}\nLAPS", 
-        start_x, 
-        start_y, 
+        f"LAP : {lap_number} / {total_laps}", 
+        text_x, text_y, 
         arcade.color.WHITE, 
-        14, 
-        bold=True, 
-        anchor_x="center", 
-        anchor_y="center",
-        multiline=True,       
-        width=box_width,     
-        align="center"     
+        font_size=font_size, 
+        bold=True,
+        anchor_x="left", anchor_y="center",
     )
 
- 
 def draw_corners(corner_data, rotation, track_scale, offset_x, offset_y):
     """Renders corner markers and labels slightly offset from the track line."""
     if not corner_data:
@@ -150,11 +124,10 @@ def draw_corners(corner_data, rotation, track_scale, offset_x, offset_y):
             font_name="Kenney Future"
         )
 
-
 def draw_weather_card(weather_row, screen_width, screen_height):
     if weather_row is None:
         return
-
+ 
     if not hasattr(draw_weather_card, "icons"):
         icon_path = "assets/images"
         if not os.path.exists(icon_path):
@@ -174,51 +147,58 @@ def draw_weather_card(weather_row, screen_width, screen_height):
                 print(f"❌ ERROR: Failed to load icons: {e}")
                 draw_weather_card.icons = None
 
-    box_width, box_height = 260, 110
+    box_width, box_height = 260, 140
     padding = 20 
     center_x = screen_width - (box_width / 2) - padding
-    center_y = screen_height - (box_height / 2) - padding - 100
+    center_y = screen_height - (box_height / 2) - padding - 40
 
-    left_align = center_x - (box_width / 2) + 15
-    mid_point  = center_x + (box_width / 2) - 85 
+    right_align = center_x + (box_width / 2) - 15
+    title_left = center_x - (box_width / 2) + 15
     
-    top_y_text = center_y + (box_height / 2) - 20
-    row1_y = center_y + 5    
-    row2_y = center_y - 25   
+    top_y_text = center_y + (box_height / 2) - 15
     icon_size = 16      
-    font_size = 13
+    font_size = 13 
 
-    arcade.draw_text("SESSION WEATHER", left_align, top_y_text, arcade.color.YELLOW, font_size, bold=True)
+    row1_y = top_y_text - 25    # Air Temp (Closer to title)
+    row2_y = row1_y - 22        # Track Temp
+    row3_y = row2_y - 22        # Humidity
+    row4_y = row3_y - 22        # Wind Speed   
+
+    # Title & Status 
+    arcade.draw_text("SESSION WEATHER", title_left, top_y_text, arcade.color.YELLOW, font_size, bold=True)
     
     status_text  = "DRY" if not weather_row['Rainfall'] else "RAIN"
     status_color = arcade.color.LIGHT_GREEN if not weather_row['Rainfall'] else arcade.color.SKY_BLUE
-    arcade.draw_text(status_text, center_x + (box_width / 2) - 45, top_y_text, status_color, font_size, bold=True)
+    arcade.draw_text(status_text, right_align, top_y_text, status_color, font_size, anchor_x="right", bold=True)
 
     if draw_weather_card.icons:
+        # Define the absolute right-most X position for the icons
+        icon_x = right_align - (icon_size / 2) 
+        text_x = right_align - icon_size - 10
+
+        # Row 1: Air Temp
         temp = weather_row['AirTemp'] 
         icon_key = 'air_hot' if temp >= 25 else 'air_cold'
-        arcade.draw_texture_rect(draw_weather_card.icons[icon_key],
-            arcade.rect.XYWH(left_align + 7, row1_y, icon_size, icon_size))
-        arcade.draw_text(f"{temp}°C", left_align + 28, row1_y, arcade.color.WHITE, font_size, anchor_y="center")
+        arcade.draw_text(f"{temp}°C : Air Temp", text_x, row1_y, arcade.color.WHITE, font_size, anchor_x="right", anchor_y="center")
+        arcade.draw_texture_rect(draw_weather_card.icons[icon_key], arcade.rect.XYWH(icon_x, row1_y, icon_size, icon_size))
 
-        arcade.draw_texture_rect(draw_weather_card.icons['track'],
-            arcade.rect.XYWH(mid_point + 7, row1_y, icon_size, icon_size))
-        arcade.draw_text(f"{weather_row['TrackTemp']}°C", mid_point + 28, row1_y, arcade.color.WHITE, font_size, anchor_y="center")
+        # Row 2: Track Temp
+        arcade.draw_text(f"{weather_row['TrackTemp']}°C : Track Temp", text_x, row2_y, arcade.color.WHITE, font_size, anchor_x="right", anchor_y="center")
+        arcade.draw_texture_rect(draw_weather_card.icons['track'], arcade.rect.XYWH(icon_x, row2_y, icon_size, icon_size))
         
-        arcade.draw_texture_rect(draw_weather_card.icons['humidity'],
-            arcade.rect.XYWH(left_align + 7, row2_y, icon_size, icon_size))
-        arcade.draw_text(f"{weather_row['Humidity']}%", left_align + 28, row2_y, arcade.color.WHITE, font_size, anchor_y="center")
+        # Row 3: Humidity
+        arcade.draw_text(f"{weather_row['Humidity']}% : Humidity", text_x, row3_y, arcade.color.WHITE, font_size, anchor_x="right", anchor_y="center")
+        arcade.draw_texture_rect(draw_weather_card.icons['humidity'], arcade.rect.XYWH(icon_x, row3_y, icon_size, icon_size))
  
-        arcade.draw_texture_rect(draw_weather_card.icons['wind'],
-            arcade.rect.XYWH(mid_point + 7, row2_y, icon_size, icon_size))
-        arcade.draw_text(f"{weather_row['WindSpeed']}m/s", mid_point + 28, row2_y, arcade.color.WHITE, font_size, anchor_y="center")
+        # Row 4: Wind Speed
+        arcade.draw_text(f"{weather_row['WindSpeed']} m/s : Wind Speed", text_x, row4_y, arcade.color.WHITE, font_size, anchor_x="right", anchor_y="center")
+        arcade.draw_texture_rect(draw_weather_card.icons['wind'], arcade.rect.XYWH(icon_x, row4_y, icon_size, icon_size))
         
     else: 
-        arcade.draw_text(f"Air: {weather_row['AirTemp']}°C",    left_align, row1_y, arcade.color.WHITE, font_size)
-        arcade.draw_text(f"Trk: {weather_row['TrackTemp']}°C",  mid_point,  row1_y, arcade.color.WHITE, font_size)
-        arcade.draw_text(f"Hum: {weather_row['Humidity']}%",    left_align, row2_y, arcade.color.WHITE, font_size)
-        arcade.draw_text(f"Wnd: {weather_row['WindSpeed']}m/s", mid_point,  row2_y, arcade.color.WHITE, font_size)
-
+        arcade.draw_text(f"{weather_row['AirTemp']}°C : Air Temp",    right_align, row1_y, arcade.color.WHITE, font_size, anchor_x="right")
+        arcade.draw_text(f"{weather_row['TrackTemp']}°C : Track Temp",  right_align, row2_y, arcade.color.WHITE, font_size, anchor_x="right")
+        arcade.draw_text(f"{weather_row['Humidity']}% : Humidity",    right_align, row3_y, arcade.color.WHITE, font_size, anchor_x="right")
+        arcade.draw_text(f"{weather_row['WindSpeed']} m/s : Wind Speed", right_align, row4_y, arcade.color.WHITE, font_size, anchor_x="right")
 
 def draw_track(fx, fy, drv, current_lap, db_root, scale=1.0):
     if fx is None or fy is None:
@@ -273,7 +253,6 @@ def draw_track(fx, fy, drv, current_lap, db_root, scale=1.0):
 
     arcade.draw_line_strip(track_points, color, 6)
     arcade.draw_line_strip(track_points, arcade.color.BLACK, 3)
-
 
 def draw_focused_driver_telemetry(app, leader_lap, get_screen_coords, draw_track, draw_tel, box_geometry=(50, 160, 900, 500)):
     """
@@ -413,8 +392,7 @@ def draw_focused_driver_telemetry(app, leader_lap, get_screen_coords, draw_track
                     title="",
                     max_val=mx
                 )
-
-                                        
+                                    
 def draw_tel(telemetry_data, max_rows, origin_x, origin_y, plot_width, plot_height, color, title="SPEED", max_val=350.0):
     """
     Draws a telemetry line chart directly onto the Arcade window with a centered

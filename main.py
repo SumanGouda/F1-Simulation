@@ -1,16 +1,13 @@
 import arcade
-import sqlite3
-import shutil 
-import time
+import sqlite3 
 import os
 import warnings
 warnings.filterwarnings("ignore")
-import pandas as pd
-import numpy as np
+import pandas as pd 
 from rendering.selection_dialog import get_race_selection
 from rendering.ui_renderer import draw_leaderboard, draw_lap_number, draw_corners, draw_weather_card, draw_track, draw_tel, draw_focused_driver_telemetry
 from core.data_exporter import DataExporter
-from core.session_manager import SessionManager, get_season_gp_list
+from core.session_manager import SessionManager
 from core.telemetry_processor import TelemetryProcessor
 from utils.helpers import prepare_track_layout, get_screen_coords, calculate_weather_frame_ratio, get_max_session_rows, hex_to_rgb
 
@@ -101,20 +98,20 @@ class F1ReplayWindow(arcade.Window):
         pass  # Labels are redrawn dynamically each frame
 
     def setup(self):
-        # Load the F1 Session
+        # --- 1. CORE SESSION INITIALIZATION ---
         self.session_manager = SessionManager(year=self.year, gp=self.gp_name.title(), session_type="R")
         
         if self.session_manager.session is None:
             print("Failed to load F1 Session.")
-            return
+            return 
 
-        # Create the .db files 
+        # Create database paths and structure
         self.exporter = DataExporter(self.session_manager)
         self.exporter.export_all_data()
         gp_clean = self.session_manager.gp.lower()
         self.db_path = f"database/race_{gp_clean}_{self.year}/{gp_clean}_{self.year}.db"
         
-        # Prepare UI Metadata & Layout 
+        # --- 3. UI METADATA & GRID POSITIONING ---
         self.results_df = self.session_manager.get_session_results()
         if self.results_df is not None:
             self.results_df = self.results_df.sort_values(by='GridPosition', na_position='last')
@@ -124,6 +121,7 @@ class F1ReplayWindow(arcade.Window):
         self.rotation = self.session_manager.get_circuit_rotation() or 0
         self.corner_data = self.session_manager.get_corner_data()
         
+        # --- 4. TRACK COORDS & VIEWS DESIGN LAYOUT ---
         fastest_lap = self.session_manager.get_session_fastest_lap()
         if fastest_lap is not None:
             tp_track = TelemetryProcessor(fastest_lap)
@@ -134,30 +132,30 @@ class F1ReplayWindow(arcade.Window):
                 self.raw_y = raw_y
                 
                 (self.fx, self.fy, self.offset_x, self.offset_y, self.track_scale) = prepare_track_layout(
-                        raw_x, raw_y, SCREEN_WIDTH, SCREEN_HEIGHT, 
-                        padding_left=320, rotation=self.rotation
-                    )            
+                    raw_x, raw_y, SCREEN_WIDTH, SCREEN_HEIGHT, 
+                    padding_left=320, rotation=self.rotation
+                )            
                 self.track_scale_focused = self.track_scale * 0.30
                 self.foc_offset_x = self.offset_x + 300
                 self.foc_offset_y = self.offset_y - 80
  
-        self.car_colors = {abbr: hex_to_rgb(info.get('TeamColor', '#FFFFFF')) 
-                           for abbr, info in self.driver_metadata.items()}
-     
+        # --- 5. CAR COLORS & DRIVER METRICS DICTIONARIES ---
+        self.car_colors = {
+            abbr: hex_to_rgb(info.get('TeamColor', '#FFFFFF')) 
+            for abbr, info in self.driver_metadata.items()
+        }
         self.current_car_positions = {abbr: (0, 0) for abbr in self.driver_metadata.keys()}
         self.driver_row_counters = {abbr: 0 for abbr in self.driver_metadata.keys()}
+        self.driver_float_counters = {abbr: 0.0 for abbr in self.driver_metadata.keys()}
         
-        # Frame & Weather Timing Logic 
+        # --- 6. SIMULATION SPEEDS & WEATHER TIMING LOGIC ---
         self.max_rows = get_max_session_rows(self.driver_metadata.keys(), self.db_path)
         self.weather_frame_ratio = calculate_weather_frame_ratio(self.driver_metadata.keys(), self.db_path)
  
         self.global_frame_counter = 0
         self.weather_index = 0
         self.race_speed = 1.5
-        self.current_weather = None
-        
-        self.driver_float_counters = {abbr: 0.0 for abbr in self.driver_metadata.keys()}
-        print(f"Setup complete. Weather ratio set to 1:{self.weather_frame_ratio}")
+        self.current_weather = None 
         
     def on_update(self, delta_time):
         if self.is_paused:
