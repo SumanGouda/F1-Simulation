@@ -5,66 +5,75 @@ import sqlite3
 import numpy as np
 
 def draw_leaderboard(sorted_drivers, driver_metadata, car_colors, screen_height):
-    start_x, start_y = 130, screen_height - 120 
-    box_width = 190          # reduced from 240
-    box_height = 28
-    spacing = 32
-    border_thickness = 3
-    
+    leaderboard_center_x = 15 + (170/2)
+    leaderboard_top_y    = screen_height - 120
+
+    box_width        = 170
+    box_height       = 24
+    row_spacing      = 28
+    border_thickness = 2.5
+
+    text_left_x  = leaderboard_center_x - 75
+    text_right_x = leaderboard_center_x + 75
+
     hitboxes = []
 
     for i, abbr in enumerate(sorted_drivers):
-        meta = driver_metadata.get(abbr, {})
+        meta  = driver_metadata.get(abbr, {})
         color = car_colors.get(abbr, arcade.color.GRAY)
-        curr_y = start_y - (i * spacing)
-        
+        row_y = leaderboard_top_y - (i * row_spacing)
+
+        # Border (team color)
         arcade.draw_rect_filled(
-            arcade.rect.XYWH(start_x, curr_y, box_width, box_height), 
+            arcade.rect.XYWH(leaderboard_center_x, row_y, box_width, box_height),
             color
         )
+        # Inner fill (black)
         arcade.draw_rect_filled(
             arcade.rect.XYWH(
-                start_x, curr_y, 
-                box_width - border_thickness, 
+                leaderboard_center_x, row_y,
+                box_width - border_thickness,
                 box_height - border_thickness
-            ), 
+            ),
             arcade.color.BLACK
         )
 
+        # Gap calculation
         if i == 0:
             gap_display = "INTERVAL"
         else:
-            ahead_abbr = sorted_drivers[i - 1]
-            ahead_meta = driver_metadata.get(ahead_abbr, {})
-            dist_now = meta.get('total_distance', 0.0)
-            dist_ahead = ahead_meta.get('total_distance', 0.0)
-            gap_meters = dist_ahead - dist_now
-            speed_kmh = meta.get('speed', 0.1) 
-            speed_ms = max(speed_kmh / 3.6, 0.5) 
-            gap_seconds = gap_meters / speed_ms
-            gap_display = f"+{max(0, gap_seconds):.1f}s"
-        
+            ahead_abbr    = sorted_drivers[i - 1]
+            ahead_meta    = driver_metadata.get(ahead_abbr, {})
+            dist_now      = meta.get('total_distance', 0.0)
+            dist_ahead    = ahead_meta.get('total_distance', 0.0)
+            gap_meters    = dist_ahead - dist_now
+            speed_kmh     = meta.get('speed', 0.1)
+            speed_ms      = max(speed_kmh / 3.6, 0.5)
+            gap_seconds   = gap_meters / speed_ms
+            gap_display   = f"+{max(0, gap_seconds):.1f}s"
+
         arcade.draw_text(
-            f"{i+1}  {abbr}", 
-            start_x - 85, curr_y,             # adjusted from -110 to fit narrower box
+            f"{i+1}  {abbr}",
+            text_left_x, row_y,
             arcade.color.WHITE, 12, bold=True, anchor_y="center"
         )
         arcade.draw_text(
-            gap_display, 
-            start_x + 85, curr_y,              # adjusted from +110
+            gap_display,
+            text_right_x, row_y,
             arcade.color.WHITE, 11, bold=True, anchor_x="right", anchor_y="center"
         )
+
         hitboxes.append({
-            "left":   start_x - (box_width / 2),
-            "right":  start_x + (box_width / 2),
-            "bottom": curr_y - (box_height / 2),
-            "top":    curr_y + (box_height / 2),
+            "left":   leaderboard_center_x - (box_width / 2),
+            "right":  leaderboard_center_x + (box_width / 2),
+            "bottom": row_y - (box_height / 2),
+            "top":    row_y + (box_height / 2),
             "driver": abbr
         })
-        
+
     return hitboxes
 
-def draw_lap_number(sorted_drivers, driver_metadata, screen_width, screen_height, total_laps): 
+def draw_lap_number(sorted_drivers, driver_metadata, screen_height, total_laps): 
     if not sorted_drivers:
         return
          
@@ -72,9 +81,9 @@ def draw_lap_number(sorted_drivers, driver_metadata, screen_width, screen_height
     meta = driver_metadata.get(lead_abbr, {}) 
     lap_number = int(meta.get('lap_number', 1))
      
-    box_width = 190   # matches leaderboard's box_width
-    text_x = 130 - (box_width / 2)   # leaderboard's left edge
-    text_y = screen_height - 90
+    leaderboard_left_edge = 15
+    text_x = leaderboard_left_edge
+    text_y = screen_height - 80     # (Increase this to move up)
     font_size = 14
 
     arcade.draw_text(
@@ -86,7 +95,7 @@ def draw_lap_number(sorted_drivers, driver_metadata, screen_width, screen_height
         anchor_x="left", anchor_y="center",
     )
 
-def draw_corners(corner_data, rotation, track_scale, offset_x, offset_y):
+def draw_corners(corner_data, rotation, scale, offset_x, offset_y):
     """Renders corner markers and labels slightly offset from the track line."""
     if not corner_data:
         return
@@ -103,8 +112,8 @@ def draw_corners(corner_data, rotation, track_scale, offset_x, offset_y):
         rx = raw_x * cos_val - raw_y * sin_val
         ry = raw_x * sin_val + raw_y * cos_val
         
-        fx = (rx * track_scale) + offset_x
-        fy = (ry * track_scale) + offset_y
+        fx = (rx * scale) + offset_x
+        fy = (ry * scale) + offset_y
 
         angle_rad = math.radians(corner.get('angle', 0) + rotation)
         fx += math.cos(angle_rad) * push_distance
@@ -200,20 +209,11 @@ def draw_weather_card(weather_row, screen_width, screen_height):
         arcade.draw_text(f"{weather_row['Humidity']}% : Humidity",    right_align, row3_y, arcade.color.WHITE, font_size, anchor_x="right")
         arcade.draw_text(f"{weather_row['WindSpeed']} m/s : Wind Speed", right_align, row4_y, arcade.color.WHITE, font_size, anchor_x="right")
 
-def draw_track(fx, fy, drv, current_lap, db_root, scale=1.0):
+def draw_track(fx, fy, drv, current_lap, db_root):
     if fx is None or fy is None:
         return 
     
     track_points = np.column_stack((fx, fy))
-
-    if scale != 1.0:
-        cx = sum(p[0] for p in track_points) / len(track_points)
-        cy = sum(p[1] for p in track_points) / len(track_points)
-        track_points = [
-            (cx + (p[0] - cx) * scale, cy + (p[1] - cy) * scale)
-            for p in track_points
-        ]
- 
     db_path = db_root 
     
     if not hasattr(draw_track, "current_status"):
@@ -251,8 +251,8 @@ def draw_track(fx, fy, drv, current_lap, db_root, scale=1.0):
             color = status_colors[code]
             break
 
-    arcade.draw_line_strip(track_points, color, 6)
-    arcade.draw_line_strip(track_points, arcade.color.BLACK, 3)
+    arcade.draw_line_strip(track_points, color, 12)
+    arcade.draw_line_strip(track_points, arcade.color.BLACK, 9)
 
 def draw_focused_driver_telemetry(app, leader_lap, get_screen_coords, draw_track, draw_tel, box_geometry=(50, 160, 900, 500)):
     """
@@ -277,8 +277,8 @@ def draw_focused_driver_telemetry(app, leader_lap, get_screen_coords, draw_track
         except ValueError:
             rank_text = "P??"
          
-        arcade.draw_circle_filled(fx, fy, 10, color)  
-        arcade.draw_circle_outline(fx, fy, 13, arcade.color.WHITE, 2) 
+        arcade.draw_circle_filled(fx, fy, 7, color)  
+        arcade.draw_circle_outline(fx, fy, 9, arcade.color.WHITE, 2) 
         arcade.draw_text(f"{abbr} [{rank_text}]", fx + 18, fy, arcade.color.WHITE, 12, bold=True, anchor_y="center")
              
         if app.raw_x is not None and app.raw_y is not None:
@@ -286,7 +286,7 @@ def draw_focused_driver_telemetry(app, leader_lap, get_screen_coords, draw_track
                 app.raw_x, app.raw_y,
                 app.rotation, active_scale, app.foc_offset_x, app.foc_offset_y
             ) 
-            draw_track(track_fx, track_fy, app.sorted_drivers, leader_lap, app.db_path, scale=1.0)
+            draw_track(track_fx, track_fy, app.sorted_drivers, leader_lap, app.db_path)
 
         db_file = app.db_path
         hist_speed    = None
