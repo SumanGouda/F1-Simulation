@@ -5,50 +5,75 @@ import warnings
 warnings.filterwarnings("ignore")
 import pandas as pd 
 from rendering.selection_dialog import get_race_selection
-from rendering.ui_renderer import draw_leaderboard, draw_lap_number, draw_corners, draw_weather_card, draw_track, draw_tel, draw_focused_driver_telemetry
+from rendering.ui_renderer import (
+    draw_leaderboard, draw_lap_number, draw_corners, draw_weather_card, draw_track, draw_tel, 
+    draw_focused_driver_telemetry, draw_tab_bar, draw_h2h_selection_panel, draw_data_card
+    )
 from core.data_exporter import DataExporter
 from core.session_manager import SessionManager
 from core.telemetry_processor import TelemetryProcessor
-from utils.helpers import prepare_track_layout, get_screen_coords, calculate_weather_frame_ratio, get_max_session_rows, hex_to_rgb
+from rendering.tabs_ui import draw_position_chart
+from utils.helpers import (
+    prepare_track_layout, get_screen_coords, calculate_weather_frame_ratio, 
+    get_max_session_rows, hex_to_rgb, get_results_from_db
+    )
 
-SCREEN_WIDTH  = 1500
-SCREEN_HEIGHT = 900
+SCREEN_WIDTH        = 1500
+SCREEN_HEIGHT       = 900
 
-TRACK_PADDING_LEFT       = 500  # increase → smaller / more left-padded track
-LEADERBOARD_LEFT         = 15
+TRACK_PADDING_LEFT  = 500  # increase → smaller / more left-padded track
+LEADERBOARD_LEFT    = 15
 
 
 class F1ReplayWindow(arcade.Window):
     def __init__(self, year, gp_name):
-        super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT) 
+        super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT)
         arcade.set_background_color(arcade.color.BLACK)
 
-        self.year         = year
-        self.gp_name      = gp_name.lower()
-        self.screen_title = f"F1 Race Replay - {self.gp_name.title()} {self.year}"
+        # --- Session Info & Window Metadata ---
+        self.year                   = year
+        self.gp_name                = gp_name.lower()
+        self.screen_title               = f"F1 Race Replay - {self.gp_name.title()} {self.year}"
         self.set_caption(self.screen_title)
 
-        self.driver_metadata     = {}
-        self.sorted_drivers      = []
-        self.corner_data         = []
-        self.is_paused           = False
-        self.current_weather     = None
-        self.selected_driver     = None
-        self.raw_x = self.raw_y  = None
-        self.fx    = self.fy     = None
-        self.control_hitboxes    = {}
-        self.track_scale_focused = 0.5
-        self.foc_offset_x        = 1200
-        self.foc_offset_y        = 0
+        # --- Track Layout ---
+        self.track_scale_focused    = 0.5
+        self.foc_offset_x           = 1200
+        self.foc_offset_y           = 0
+        self.fx                     = None
+        self.fy                     = None
+        self.raw_x                  = None
+        self.raw_y                  = None
 
-        self.setup()
+        # --- App State ---
+        self.sorted_drivers         = []
+        self.corner_data            = []
+        self.driver_metadata        = {}
+        self.current_weather        = None
+        self.selected_driver        = None
 
+        # --- UI Components & Hitboxes ---
+        self.control_hitboxes       = {}
+        self.back_hitbox            = {}
+        self.h2h_compare_btn        = {}
+
+        # --- UI Navigation & Simulation State ---
+        self.show_lap_chart         = False
+        self.h2h_comparison         = False
+        self.h2h_confirmed          = False
+        self.is_paused              = False
+        self.h2h_selected           = []
+
+        # --- Asset Loading ---
         self.btn_icons = {
             "SLOW":  arcade.load_texture("assets/images/slow.png"),
             "PAUSE": arcade.load_texture("assets/images/pause.png"),
             "PLAY":  arcade.load_texture("assets/images/play.png"),
             "FAST":  arcade.load_texture("assets/images/fast.png"),
         }
+
+        # --- Setup ---
+        self.setup()
 
     # ─────────────────────────────────────────────
     #  PLAYBACK CONTROLS
@@ -107,11 +132,8 @@ class F1ReplayWindow(arcade.Window):
         self.db_path = f"database/race_{gp_clean}_{self.year}/{gp_clean}_{self.year}.db"
 
         # 3. Driver metadata
-        self.results_df = self.session_manager.get_session_results()
-        if self.results_df is not None:
-            self.results_df      = self.results_df.sort_values(by='GridPosition', na_position='last')
-            self.driver_metadata = self.results_df.set_index('Abbreviation').to_dict('index')
-            self.sorted_drivers  = list(self.driver_metadata.keys())
+        self.driver_metadata, self.sorted_drivers = get_results_from_db(self.db_path)
+        self.initial_drivers = self.sorted_drivers.copy()
 
         # 4. Circuit layout
         self.rotation    = self.session_manager.get_circuit_rotation() or 0
@@ -124,9 +146,7 @@ class F1ReplayWindow(arcade.Window):
             if raw_x is not None and raw_y is not None:
                 self.raw_x = raw_x
                 self.raw_y = raw_y
-                (self.fx, self.fy,
-                 self.offset_x, self.offset_y,
-                 self.track_scale) = prepare_track_layout(
+                (self.fx, self.fy, self.offset_x, self.offset_y, self.track_scale) = prepare_track_layout(
                     raw_x, raw_y, SCREEN_WIDTH, SCREEN_HEIGHT,
                     padding_left=TRACK_PADDING_LEFT, rotation=self.rotation
                 )
@@ -221,54 +241,108 @@ class F1ReplayWindow(arcade.Window):
 
     def on_draw(self):
         self.clear()
-        
-        # Draw the title
-        arcade.draw_text(
-            self.screen_title, SCREEN_WIDTH / 2, SCREEN_HEIGHT - 20, arcade.color.RED, font_size=27, anchor_x="center", anchor_y="center"
-        )
 
+        # Title
+        arcade.draw_text(
+            self.screen_title, SCREEN_WIDTH / 2, SCREEN_HEIGHT - 20, arcade.color.RED,
+            font_size=27, anchor_x="center", anchor_y="center"
+        )
+        # HUD
+        try:
+            total_laps = max(int(meta.get('Laps', 0) or 0) for meta in self.driver_metadata.values())
+        except (ValueError, TypeError):
+            total_laps = 0
+        
+        # Leader Lap
         try:
             leader_lap = self.driver_metadata.get(self.sorted_drivers[0], {}).get('lap_number', 0)
         except Exception as e:
             leader_lap = 0
             print(f"Leader lap error: {e}")
+        
+        # Playback Controls
+        self._draw_playback_controls()
 
-        if self.selected_driver is None:
-            if self.corner_data:
-                try:
-                    draw_corners(self.corner_data, self.rotation, self.track_scale, self.offset_x, self.offset_y)
-                except Exception as e:
-                    print(f"Corner draw error: {e}")
-
+        # Lap Chart Page
+        if self.show_lap_chart:
+            draw_position_chart(
+                self.db_path, total_laps, len(self.sorted_drivers), 120, 150, SCREEN_WIDTH - 280, SCREEN_HEIGHT - 320, 
+                self.car_colors, getattr(self, 'retired_icon',  None), getattr(self, 'finished_icon', None)
+            )
+        
+        # H2H Comparison Page
+        elif self.h2h_comparison:
+            draw_h2h_selection_panel(self, SCREEN_HEIGHT, SCREEN_WIDTH)
             draw_track(self.fx, self.fy, self.sorted_drivers, leader_lap, self.db_path)
 
-            for abbr in self.sorted_drivers:
-                pos = self.current_car_positions.get(abbr)
-                if not pos or pos == (0, 0):
-                    continue
-                fx, fy = get_screen_coords(pos[0], pos[1], self.rotation, self.track_scale, self.offset_x, self.offset_y)
-                color  = self.car_colors.get(abbr, arcade.color.GRAY)
-                arcade.draw_circle_filled(fx, fy, 5, color)
-                arcade.draw_text(abbr, fx + 12, fy, arcade.color.WHITE, 10, bold=True, anchor_y="center")
+            if self.h2h_confirmed:
+                # Cars  
+                for abbr in self.h2h_selected:
+                    pos = self.current_car_positions.get(abbr)
+                    if not pos or pos == (0, 0):
+                        continue
+                    fx, fy = get_screen_coords(pos[0], pos[1], self.rotation, self.track_scale, self.offset_x, self.offset_y)
+                    color  = self.car_colors.get(abbr, arcade.color.GRAY)
+                    
+                    arcade.draw_circle_filled(fx, fy, 5, color)
+                    arcade.draw_text(abbr, fx + 12, fy, arcade.color.WHITE, 10, bold=True, anchor_y="center")
 
-            self.leaderboard_hitboxes = draw_leaderboard(
-                self.sorted_drivers, self.driver_metadata, self.car_colors, self.height
-            )
+                # 2. Draw telemetry data  
+                draw_data_card(self, self.h2h_selected, self.db_path, SCREEN_WIDTH, SCREEN_HEIGHT)   
+            
+            # Lap Number 
+            draw_lap_number(self.sorted_drivers, self.driver_metadata, SCREEN_HEIGHT, SCREEN_WIDTH, int(total_laps))
 
+        # Main Page
         else:
-            draw_focused_driver_telemetry(self, leader_lap, get_screen_coords, draw_track, draw_tel)
+            if self.selected_driver is None:
+                # Tab bar
+                tabs = ["Lap Chart", "(H2H) Comparison", "TELEMETRY", "WEATHER"]
+                tab_w, tab_h = 160, 35
+                pad          = 12
+                total_width  = (len(tabs) * tab_w) + ((len(tabs) - 1) * pad)
+                start_x      = (SCREEN_WIDTH / 2) - (total_width / 2)
+                self.tab_hitboxes = draw_tab_bar(start_x, 120, pad, tabs, tab_w, tab_h)
 
-        try:
-            total_laps = int(self.results_df['Laps'].max()) if self.results_df is not None else 0
-        except (ValueError, TypeError):
-            total_laps = 0
+                # Lap Number 
+                draw_lap_number(self.sorted_drivers, self.driver_metadata, SCREEN_HEIGHT, SCREEN_WIDTH, int(total_laps))
 
-        draw_lap_number(self.sorted_drivers, self.driver_metadata, self.height, int(total_laps))
+                # Corners
+                if self.corner_data:
+                    try:
+                        draw_corners(self.corner_data, self.rotation, self.track_scale, self.offset_x, self.offset_y)
+                    except Exception as e:
+                        print(f"Corner draw error: {e}")
 
-        if self.current_weather is not None:
-            draw_weather_card(self.current_weather, self.width, self.height)
+                # Track
+                draw_track(self.fx, self.fy, self.sorted_drivers, leader_lap, self.db_path)
 
-        self._draw_playback_controls()
+                # Cars
+                for abbr in self.sorted_drivers:
+                    pos = self.current_car_positions.get(abbr)
+                    if not pos or pos == (0, 0):
+                        continue
+                    fx, fy = get_screen_coords(pos[0], pos[1], self.rotation, self.track_scale, self.offset_x, self.offset_y)
+                    color  = self.car_colors.get(abbr, arcade.color.GRAY)
+                    arcade.draw_circle_filled(fx, fy, 5, color)
+                    arcade.draw_text(abbr, fx + 12, fy, arcade.color.WHITE, 10, bold=True, anchor_y="center")
+
+                # Leaderboard
+                self.leaderboard_hitboxes = draw_leaderboard(
+                    self.sorted_drivers, self.driver_metadata, self.car_colors, self.height
+                )
+                # Weather Card
+                if self.current_weather is not None:
+                    draw_weather_card(self.current_weather, self.width, self.height)
+
+            else:
+                draw_focused_driver_telemetry(self, leader_lap, get_screen_coords, draw_track, draw_tel)
+                draw_lap_number(self.sorted_drivers, self.driver_metadata, SCREEN_HEIGHT, SCREEN_WIDTH, int(total_laps))
+
+                if self.current_weather is not None:
+                    draw_weather_card(self.current_weather, self.width, self.height)
+        
+        
 
     # ─────────────────────────────────────────────
     #  INPUT
@@ -276,13 +350,65 @@ class F1ReplayWindow(arcade.Window):
 
     def on_mouse_press(self, x, y, button, modifiers):
         if button != arcade.MOUSE_BUTTON_LEFT:
-            return
+            return 
 
         for name, box in self.control_hitboxes.items():
             if box["left"] <= x <= box["right"] and box["bottom"] <= y <= box["top"]:
                 {"SLOW": self._on_slow, "PAUSE": self._on_pause, "FAST": self._on_fast}[name](None)
                 return
 
+        # Lap chart view
+        if self.show_lap_chart:
+            if self.back_hitbox:
+                box = self.back_hitbox
+                if box["left"] <= x <= box["right"] and box["bottom"] <= y <= box["top"]:
+                    self.show_lap_chart = False
+                    return
+            self.show_lap_chart = False
+            return
+
+        # H2H comparison view
+        if self.h2h_comparison:
+            # Compare button
+            if self.h2h_compare_btn:
+                box = self.h2h_compare_btn
+                if box["left"] <= x <= box["right"] and box["bottom"] <= y <= box["top"]:
+                    self.h2h_confirmed = True 
+                    return
+
+            # Driver selection rows
+            for abbr, box in self.h2h_panel_hitboxes.items():
+                if box["left"] <= x <= box["right"] and box["bottom"] <= y <= box["top"]:
+                    if abbr in self.h2h_selected:
+                        self.h2h_selected.remove(abbr)   # deselect
+                    elif len(self.h2h_selected) < 3:
+                        self.h2h_selected.append(abbr)   # select
+                    return
+                
+            if self.h2h_panel_hitboxes: 
+                sample_box = next(iter(self.h2h_panel_hitboxes.values()))
+                panel_left = sample_box["left"]
+                panel_right = sample_box["right"]
+                 
+                if x < panel_left or x > panel_right:
+                    self.h2h_comparison = False
+                    self.h2h_confirmed = False   
+                    self.h2h_selected = []
+                    return
+             
+            return
+
+        # Tab bar
+        if hasattr(self, 'tab_hitboxes'):
+            for label, box in self.tab_hitboxes.items():
+                if box["left"] <= x <= box["right"] and box["bottom"] <= y <= box["top"]:
+                    if label == "Lap Chart":
+                        self.show_lap_chart = True
+                    elif label == "(H2H) Comparison":
+                        self.h2h_comparison = True
+                    return
+
+        # Leaderboard
         for box in getattr(self, "leaderboard_hitboxes", []) or []:
             if box["left"] <= x <= box["right"] and box["bottom"] <= y <= box["top"]:
                 self.selected_driver = box['driver']

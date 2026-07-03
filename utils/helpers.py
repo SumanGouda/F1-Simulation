@@ -105,3 +105,129 @@ def prepare_track_layout(raw_x, raw_y, screen_width, screen_height, padding_left
     fy = y_scaled + offset_y
     
     return fx, fy, offset_x, offset_y, track_scale
+
+def get_results_from_db(db_path): 
+
+    conn   = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT Abbreviation, DriverNumber, TeamName, TeamColor, 
+               Position, GridPosition, Time, Status, Points, Laps
+        FROM results
+        ORDER BY GridPosition ASC
+    """)
+    rows    = cursor.fetchall()
+    columns = ['DriverNumber', 'TeamName', 'TeamColor', 'Position', 
+               'GridPosition', 'Time', 'Status', 'Points', 'Laps']
+    conn.close()
+
+    driver_metadata = {}
+    sorted_drivers  = []
+
+    for row in rows:
+        abbr = row[0]
+        driver_metadata[abbr] = dict(zip(columns, row[1:]))
+        sorted_drivers.append(abbr)
+
+    return driver_metadata, sorted_drivers
+
+def get_driver_lap_positions(db_path):
+    conn   = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    # Grid positions keyed by abbreviation
+    cursor.execute("""
+        SELECT Abbreviation, GridPosition
+        FROM results
+        WHERE GridPosition IS NOT NULL
+    """)
+    grid_positions = {abbr: int(float(grid)) for abbr, grid in cursor.fetchall()}
+
+    # Lap positions — Driver column is already abbreviation
+    cursor.execute("""
+        SELECT Driver, LapNumber, Position
+        FROM laps
+        WHERE Position IS NOT NULL
+        ORDER BY Driver, LapNumber ASC
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+
+    # Build lap map keyed by abbreviation
+    driver_lap_map = {}
+    for abbr, lap, position in rows:
+        if abbr not in driver_lap_map:
+            driver_lap_map[abbr] = {}
+        driver_lap_map[abbr][int(float(lap))] = int(float(position))
+
+    # Build final positions list per driver
+    driver_lap_positions = {}
+    for abbr, grid in grid_positions.items():
+        positions      = [grid]
+        lap_data       = driver_lap_map.get(abbr, {})
+
+        if not lap_data:
+            continue
+
+        max_driver_lap = max(lap_data.keys())
+
+        for lap in range(1, max_driver_lap + 1):
+            pos = lap_data.get(lap)
+            if pos is not None:
+                positions.append(pos)
+            else:
+                positions.append(positions[-1])
+
+        driver_lap_positions[abbr] = positions
+
+    return driver_lap_positions
+
+def get_driver_telemetry(db_file, abbr, current_frame, current_lap): 
+    hist_speed = None
+    hist_brake = None
+    hist_throttle = None
+    hist_rpm = None
+    hist_gear = None
+    max_lap_rows = 1000
+
+    if not os.path.exists(db_file):
+        return hist_speed, hist_brake, hist_throttle, hist_rpm, max_lap_rows
+
+    try:
+        table_name = f"telemetry_{abbr.lower()}"
+        
+        conn = sqlite3.connect(db_file)
+        cursor = conn.cursor()
+        
+        # Get the starting global row ID for the active lap
+        cursor.execute(f"SELECT MIN(rowid) FROM {table_name} WHERE lap_number = ?", (current_lap,))
+        lap_start_row = cursor.fetchone()[0]
+        
+        if lap_start_row is not None: 
+            relative_lap_frame = max(1, current_frame - lap_start_row + 1)
+             
+            cursor.execute(f"SELECT COUNT(*) FROM {table_name} WHERE lap_number = ?", (current_lap,))
+            max_lap_rows = max(2, cursor.fetchone()[0])
+             
+            query = f"""
+                SELECT speed, brake, throttle, rpm, ngear FROM {table_name} 
+                WHERE lap_number = ? 
+                ORDER BY rowid ASC 
+                LIMIT ?
+            """
+            cursor.execute(query, (current_lap, relative_lap_frame))
+            rows = cursor.fetchall()
+            
+            if rows:
+                hist_speed     = np.array([r[0] for r in rows if r[0] is not None])
+                hist_brake     = np.array([r[1] for r in rows if r[1] is not None])
+                hist_throttle  = np.array([r[2] for r in rows if r[2] is not None])
+                hist_rpm       = np.array([r[3] for r in rows if r[3] is not None])
+                hist_gear      = np.array([r[4] for r in rows if r[4] is not None]) 
+
+        conn.close()
+    except Exception as e:
+        print(f"Error reading live lap telemetry streams for {abbr}: {e}")
+
+    return hist_speed, hist_brake, hist_throttle, hist_rpm, hist_gear, max_lap_rows

@@ -147,12 +147,42 @@ class DataExporter:
                 race_df[col] = race_df[col].dt.total_seconds() 
               
         race_df.to_sql(table_name, conn, if_exists='replace', index=False)
-        conn.execute(f"CREATE INDEX idx_race_time ON {table_name}(Time)")
+        conn.execute(f"CREATE INDEX idx_race_lapnum ON {table_name}(LapNumber)")
         
         conn.commit()
         conn.close()
         print(f"Race export complete inside: {db_path}")
-        
+    
+    def __export_results(self): 
+        db_path    = os.path.join(self.base_path, f"{self.gp}_{self.sm.year}.db")
+        table_name = "results"
+
+        conn   = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}'")
+        if cursor.fetchone():
+            print(f"Skipping Results: Table '{table_name}' already exists in {self.gp}_{self.sm.year}.db.")
+            conn.close()
+            return
+
+        results_data = self.sm.get_session_results()
+        if results_data is None or results_data.empty:
+            print("No results data found to export.")
+            conn.close()
+            return
+
+        results_df = results_data.copy()
+
+        # Convert timedelta columns to seconds
+        for col in results_df.columns:
+            if pd.api.types.is_timedelta64_dtype(results_df[col]):
+                results_df[col] = results_df[col].dt.total_seconds()
+
+        results_df.to_sql(table_name, conn, if_exists='replace', index=False)
+        conn.commit()
+        conn.close()
+
     def cleanup(self):
         gc.collect() 
         time.sleep(0.7) 
@@ -177,7 +207,13 @@ class DataExporter:
             self.__export_race_data()
         except Exception as e:
             print(f"Failed to export consolidated race data: {e}")
-            
+
+        try:
+            print("Processing: Session Results...")
+            self.__export_results()
+        except Exception as e:
+            print(f"Failed to export session results: {e}")
+
         for abbr in driver_list:
             try:
                 print(f"Processing Driver: {abbr}...")
@@ -191,5 +227,4 @@ class DataExporter:
         except Exception as e:
             print(f"Failed to export weather data: {e}")
 
-        print("Export complete! All databases (Drivers & Weather) are ready.")       
-
+        print("Export complete! All databases (Drivers & Weather) are ready.")

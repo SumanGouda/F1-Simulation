@@ -3,6 +3,7 @@ import math
 import os
 import sqlite3
 import numpy as np
+from utils.helpers import get_driver_telemetry
 
 def draw_leaderboard(sorted_drivers, driver_metadata, car_colors, screen_height):
     leaderboard_center_x = 15 + (170/2)
@@ -73,7 +74,7 @@ def draw_leaderboard(sorted_drivers, driver_metadata, car_colors, screen_height)
 
     return hitboxes
 
-def draw_lap_number(sorted_drivers, driver_metadata, screen_height, total_laps): 
+def draw_lap_number(sorted_drivers, driver_metadata, screen_height, screen_width, total_laps): 
     if not sorted_drivers:
         return
          
@@ -81,18 +82,13 @@ def draw_lap_number(sorted_drivers, driver_metadata, screen_height, total_laps):
     meta = driver_metadata.get(lead_abbr, {}) 
     lap_number = int(meta.get('lap_number', 1))
      
-    leaderboard_left_edge = 15
-    text_x = leaderboard_left_edge
+    text_x = screen_width - (screen_width - 20)  # (Increase this to move right)
     text_y = screen_height - 80     # (Increase this to move up)
     font_size = 14
 
     arcade.draw_text(
-        f"LAP : {lap_number} / {total_laps}", 
-        text_x, text_y, 
-        arcade.color.WHITE, 
-        font_size=font_size, 
-        bold=True,
-        anchor_x="left", anchor_y="center",
+        f"LAP : {lap_number} / {total_laps}", text_x, text_y, arcade.color.WHITE, 
+        font_size=font_size, bold=True, anchor_x="left", anchor_y="center"
     )
 
 def draw_corners(corner_data, rotation, scale, offset_x, offset_y):
@@ -255,10 +251,6 @@ def draw_track(fx, fy, drv, current_lap, db_root):
     arcade.draw_line_strip(track_points, arcade.color.BLACK, 9)
 
 def draw_focused_driver_telemetry(app, leader_lap, get_screen_coords, draw_track, draw_tel, box_geometry=(50, 160, 900, 500)):
-    """
-    Renders the focused car view, track layout, and queries/draws real-time 
-    telemetry charts for the selected driver inside a customizable bounding box.
-    """
     abbr = app.selected_driver
     pos = app.current_car_positions.get(abbr)
     
@@ -266,8 +258,7 @@ def draw_focused_driver_telemetry(app, leader_lap, get_screen_coords, draw_track
         active_scale = app.track_scale_focused 
 
         fx, fy = get_screen_coords(
-            pos[0], pos[1],
-            app.rotation, active_scale, app.foc_offset_x, app.foc_offset_y
+            pos[0], pos[1], app.rotation, active_scale, app.foc_offset_x, app.foc_offset_y
         )
         color = app.car_colors.get(abbr, arcade.color.GRAY)
         
@@ -276,66 +267,27 @@ def draw_focused_driver_telemetry(app, leader_lap, get_screen_coords, draw_track
             rank_text = f"P{rank}"
         except ValueError:
             rank_text = "P??"
-         
+        
+        if app.raw_x is not None and app.raw_y is not None:
+            track_fx, track_fy = get_screen_coords(
+                app.raw_x, app.raw_y, app.rotation, active_scale, app.foc_offset_x, app.foc_offset_y
+            ) 
+            draw_track(track_fx, track_fy, app.sorted_drivers, leader_lap, app.db_path)
+
         arcade.draw_circle_filled(fx, fy, 7, color)  
         arcade.draw_circle_outline(fx, fy, 9, arcade.color.WHITE, 2) 
         arcade.draw_text(f"{abbr} [{rank_text}]", fx + 18, fy, arcade.color.WHITE, 12, bold=True, anchor_y="center")
              
-        if app.raw_x is not None and app.raw_y is not None:
-            track_fx, track_fy = get_screen_coords(
-                app.raw_x, app.raw_y,
-                app.rotation, active_scale, app.foc_offset_x, app.foc_offset_y
-            ) 
-            draw_track(track_fx, track_fy, app.sorted_drivers, leader_lap, app.db_path)
-
-        db_file = app.db_path
-        hist_speed    = None
-        hist_brake    = None
-        hist_throttle = None
-        hist_rpm      = None
-        max_lap_rows  = 1000 
+        # LIVE TELEMETRY EXTRACTION   
+        current_frame = app.driver_row_counters.get(abbr, 0)
+        current_lap   = app.driver_metadata[abbr].get('lap_number', 1)
         
-        if os.path.exists(db_file):
-            try:
-                current_frame = app.driver_row_counters.get(abbr, 0)
-                current_lap   = app.driver_metadata[abbr].get('lap_number', 1)
-                table_name    = f"telemetry_{abbr.lower()}"
-                
-                conn = sqlite3.connect(db_file)
-                cursor = conn.cursor()
-                
-                cursor.execute(f"SELECT MIN(rowid) FROM {table_name} WHERE lap_number = ?", (current_lap,))
-                lap_start_row = cursor.fetchone()[0]
-                
-                if lap_start_row is not None:
-                    relative_lap_frame = max(1, current_frame - lap_start_row + 1)
-                    
-                    cursor.execute(f"SELECT COUNT(*) FROM {table_name} WHERE lap_number = ?", (current_lap,))
-                    max_lap_rows = max(2, cursor.fetchone()[0])
-                    
-                    query = f"""
-                        SELECT speed, brake, throttle, rpm FROM {table_name} 
-                        WHERE lap_number = ? 
-                        ORDER BY rowid ASC 
-                        LIMIT ?
-                    """
-                    cursor.execute(query, (current_lap, relative_lap_frame))
-                    rows = cursor.fetchall()
-                    
-                    if rows:
-                        hist_speed    = np.array([r[0] for r in rows if r[0] is not None])
-                        hist_brake    = np.array([r[1] for r in rows if r[1] is not None])
-                        hist_throttle = np.array([r[2] for r in rows if r[2] is not None])
-                        hist_rpm      = np.array([r[3] for r in rows if r[3] is not None])
-                        
-                conn.close()
-            except Exception as e:
-                print(f"Error reading live lap telemetry streams for {abbr}: {e}")
+        (hist_speed, hist_brake, hist_throttle, hist_rpm, hist_gear, max_lap_rows) = get_driver_telemetry(
+            db_file=app.db_path, abbr=abbr, current_frame=current_frame, current_lap=current_lap
+        )           # Do not remove the hist_gear variable
 
         box_x, box_y, box_w, box_h = box_geometry
-
-        center_x = box_x + (box_w / 2)
-        center_y = box_y + (box_h / 2)
+        center_x, center_y = box_x + (box_w / 2), box_y + (box_h / 2)
         
         arcade.draw_rect_filled(arcade.XYWH(center_x, center_y, box_w, box_h), arcade.color.BLACK)
         arcade.draw_rect_outline(arcade.XYWH(center_x, center_y, box_w, box_h), arcade.color.DARK_GRAY, border_width=2)
@@ -343,13 +295,13 @@ def draw_focused_driver_telemetry(app, leader_lap, get_screen_coords, draw_track
         legend_y = box_y + box_h + 15
         arcade.draw_text("LIVE TELEMETRY PANEL:", box_x, legend_y, arcade.color.WHITE, 12, bold=True)
         
-        arcade.draw_text("■ SPEED",    box_x + 230, legend_y, color,                              11, bold=True)
+        arcade.draw_text("■ SPEED",    box_x + 230, legend_y, color,                               11, bold=True)
         arcade.draw_text("■ RPM",      box_x + 340, legend_y, arcade.color.LIGHT_GOLDENROD_YELLOW, 11, bold=True)
         arcade.draw_text("■ THROTTLE", box_x + 430, legend_y, arcade.color.GREEN,                  11, bold=True)
         arcade.draw_text("■ BRAKE",    box_x + 550, legend_y, arcade.color.RED,                    11, bold=True)
 
         max_t = 100.0 if (hist_throttle is not None and len(hist_throttle) > 0 and max(hist_throttle) > 1.1) else 1.0
-        max_b = 100.0 if (hist_brake    is not None and len(hist_brake)    > 0 and max(hist_brake)    > 1.1) else 1.0
+        max_b = 100.0 if (hist_brake     is not None and len(hist_brake)    > 0 and max(hist_brake)    > 1.1) else 1.0
 
         solo_datasets = [
             {"data": hist_speed, "max": 380.0,   "color": color},
@@ -364,15 +316,8 @@ def draw_focused_driver_telemetry(app, leader_lap, get_screen_coords, draw_track
             if target["data"] is not None and len(target["data"]) >= 2:
                 section_y = box_y + ((i + 1) * section_h) + 5 
                 draw_tel(
-                    telemetry_data=target["data"],
-                    max_rows=max_lap_rows,
-                    origin_x=box_x + plot_left_pad,
-                    origin_y=section_y,
-                    plot_width=box_w - plot_left_pad - plot_right_pad,
-                    plot_height=section_h - 15,
-                    color=target["color"],
-                    title="",
-                    max_val=target["max"]
+                    telemetry_data=target["data"], max_rows=max_lap_rows, origin_x=box_x + plot_left_pad, origin_y=section_y, 
+                    plot_width=box_w - plot_left_pad - plot_right_pad, plot_height=section_h - 15, color=target["color"], title="", max_val=target["max"]
                 )
  
         overlay_section_y = box_y + (0 * section_h) + 20
@@ -382,15 +327,8 @@ def draw_focused_driver_telemetry(app, leader_lap, get_screen_coords, draw_track
         ]:
             if data is not None and len(data) >= 2:
                 draw_tel(
-                    telemetry_data=data,
-                    max_rows=max_lap_rows,
-                    origin_x=box_x + plot_left_pad,
-                    origin_y=overlay_section_y,
-                    plot_width=box_w - plot_left_pad - plot_right_pad,
-                    plot_height=section_h - 15,
-                    color=col,
-                    title="",
-                    max_val=mx
+                    telemetry_data=data, max_rows=max_lap_rows, origin_x=box_x + plot_left_pad, origin_y=overlay_section_y,
+                    plot_width=box_w - plot_left_pad - plot_right_pad, plot_height=section_h - 15, color=col, title="", max_val=mx
                 )
                                     
 def draw_tel(telemetry_data, max_rows, origin_x, origin_y, plot_width, plot_height, color, title="SPEED", max_val=350.0):
@@ -413,3 +351,120 @@ def draw_tel(telemetry_data, max_rows, origin_x, origin_y, plot_width, plot_heig
     arcade.draw_text(f"{int(max_val / 2)}", origin_x - 5, origin_y + (plot_height / 2),  arcade.color.ASH_GREY, font_size=10, anchor_x="right", anchor_y="center")
     arcade.draw_text("0",                   origin_x - 5, origin_y,                       arcade.color.ASH_GREY, font_size=10, anchor_x="right", anchor_y="center")
     arcade.draw_line_strip(chart_points, color, 2)
+
+def draw_tab_bar(start_x, base_y, pad, tabs, tab_w, tab_h):
+    if not tabs:
+        return {} 
+       
+    f1_red = (225, 6, 0) 
+
+    tab_hitboxes = {}
+    for i, label in enumerate(tabs): 
+        x = start_x + (i * (tab_w + pad)) + (tab_w / 2)
+        y = base_y
+          
+        arcade.draw_lbwh_rectangle_filled(
+            left=x - tab_w / 2, bottom=y - tab_h / 2, width=tab_w, height=tab_h, color=f1_red
+        ) 
+        arcade.draw_text(
+            text=label, x=x, y=y, color=arcade.color.WHITE, font_size=12, bold=True, anchor_x="center", anchor_y="center"
+        )
+        tab_hitboxes[label] = {
+            "left": x - tab_w / 2,
+            "right": x + tab_w / 2,
+            "bottom": y - tab_h / 2,
+            "top": y + tab_h / 2
+        }
+        
+    return tab_hitboxes
+
+def draw_h2h_selection_panel(self, screen_height, screen_width):
+    panel_x, panel_y = screen_width - (screen_width - 20), screen_height - (screen_height - 150)
+    panel_w, panel_h, row_h, spacing = 100, 600, 24, 28 
+
+    # Background
+    arcade.draw_rect_filled(
+        arcade.rect.XYWH(panel_x + panel_w/2, panel_y + panel_h/2, panel_w, panel_h), (20, 20, 20)
+    )
+    arcade.draw_text("MAX : 3", panel_x, panel_y + panel_h + 15, arcade.color.WHITE, 13, bold=True, anchor_x="left")
+
+    self.h2h_panel_hitboxes = {}
+    for i, abbr in enumerate(self.initial_drivers):
+        row_y     = panel_y + panel_h - (i * spacing) - 20
+        is_selected = abbr in self.h2h_selected
+        color     = self.car_colors.get(abbr, arcade.color.GRAY)
+        bg_color  = (40, 40, 40) if not is_selected else color
+
+        arcade.draw_rect_filled(arcade.rect.XYWH(panel_x + panel_w/2, row_y, panel_w - 20, row_h), bg_color)
+        arcade.draw_text(abbr, panel_x + 20, row_y, arcade.color.WHITE, 11, bold=True, anchor_y="center")
+
+        self.h2h_panel_hitboxes[abbr] = {
+            "left": panel_x, "right": panel_x + panel_w, "bottom": row_y - row_h/2, "top": row_y + row_h/2
+        }
+
+    # Compare button
+    if len(self.h2h_selected) >= 2:
+        btn_x, btn_y = panel_x + panel_w/2, panel_y - 25
+        btn_width = panel_w
+        btn_height = 35
+        arcade.draw_rect_filled(
+            arcade.rect.XYWH(btn_x, btn_y, btn_width, btn_height), arcade.color.DARK_RED
+        )
+        arcade.draw_text(
+            "COMPARE ▶", btn_x, btn_y, arcade.color.WHITE, 12, bold=True, anchor_x="center", anchor_y="center"
+        )
+        self.h2h_compare_btn = {
+            "left": panel_x, "right": panel_x + panel_w, "bottom": btn_y - btn_height / 2, "top": btn_y + btn_height / 2
+        }
+    else:
+        self.h2h_compare_btn = {}
+
+def draw_data_card(app, drv_list, db_path, screen_width, screen_height):
+    """
+    Renders side-by-side transparent cards for however many drivers are selected,
+    keeping them perfectly dynamically centered at the bottom of the screen.
+    """
+    num_selected = len(drv_list)
+    if num_selected == 0 or not os.path.exists(db_path):
+        return
+ 
+    card_w = 300          
+    card_h = 110          
+    card_spacing = 20     
+    y_cor = 85           
+  
+    total_cards_width = (num_selected * card_w) + ((num_selected - 1) * card_spacing)
+    x_cor = (screen_width - total_cards_width) / 2         
+
+    for i, drv in enumerate(drv_list): 
+        current_x = x_cor + i * (card_w + card_spacing)
+        
+        current_frame = app.driver_row_counters.get(drv, 0)
+        current_lap   = app.driver_metadata[drv].get('lap_number', 1)
+        
+        (hist_speed, hist_brake, hist_throttle, hist_rpm, hist_gear, max_lap_rows) = get_driver_telemetry(
+            db_file=db_path, abbr=drv, current_frame=current_frame, current_lap=current_lap
+        )
+        
+        current_speed = int(hist_speed[-1]) if (hist_speed is not None and len(hist_speed) > 0) else 0
+        current_gear  = int(hist_gear[-1]) if (hist_gear is not None and len(hist_gear) > 0) else 0
+
+        center_x = current_x + (card_w / 2)
+        center_y = y_cor + (card_h / 2)
+        drv_color = app.car_colors.get(drv, arcade.color.GRAY)
+         
+        arcade.draw_rect_outline(arcade.XYWH(center_x, center_y, card_w, card_h), drv_color, border_width=4)
+         
+        arcade.draw_text(drv, center_x, y_cor + card_h - 25, arcade.color.WHITE, 14, bold=True, anchor_x="center")
+        
+        # Current Gear (Top-Left inside the card)
+        arcade.draw_text(
+            f"G: {current_gear if current_gear > 0 else 'N'}", current_x + 15, y_cor + card_h - 55,  
+            arcade.color.LIGHT_GOLDENROD_YELLOW, 11, bold=True, anchor_x="left"
+        )
+        
+        # Speed value (Top-Right inside the card)
+        arcade.draw_text(
+            f"{current_speed} km/h",  center_x, y_cor + card_h - 55, 
+            arcade.color.WHITE, 11, bold=True, anchor_x="right"
+        )
