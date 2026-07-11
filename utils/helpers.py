@@ -189,6 +189,7 @@ def get_driver_telemetry(db_file, abbr, current_frame, current_lap):
     hist_throttle = None
     hist_rpm = None
     hist_gear = None
+    hist_gap = None
     max_lap_rows = 1000
 
     if not os.path.exists(db_file):
@@ -211,23 +212,24 @@ def get_driver_telemetry(db_file, abbr, current_frame, current_lap):
             max_lap_rows = max(2, cursor.fetchone()[0])
              
             query = f"""
-                SELECT speed, brake, throttle, rpm, ngear FROM {table_name} 
+                SELECT speed, brake, throttle, rpm, ngear, gap_ahead FROM {table_name} 
                 WHERE lap_number = ? 
                 ORDER BY rowid ASC 
                 LIMIT ?
             """
             cursor.execute(query, (current_lap, relative_lap_frame))
             rows = cursor.fetchall()
-            
+
             if rows:
-                hist_speed     = np.array([r[0] for r in rows if r[0] is not None])
-                hist_brake     = np.array([r[1] for r in rows if r[1] is not None])
-                hist_throttle  = np.array([r[2] for r in rows if r[2] is not None])
-                hist_rpm       = np.array([r[3] for r in rows if r[3] is not None])
-                hist_gear      = np.array([r[4] for r in rows if r[4] is not None]) 
+                hist_speed    = np.array([r[0] for r in rows if r[0] is not None])
+                hist_brake    = np.array([r[1] for r in rows if r[1] is not None])
+                hist_throttle = np.array([r[2] for r in rows if r[2] is not None])
+                hist_rpm      = np.array([r[3] for r in rows if r[3] is not None])
+                hist_gear     = np.array([r[4] for r in rows if r[4] is not None])
+                hist_gap      = np.array([r[5] for r in rows if r[5] is not None])
 
         conn.close()
     except Exception as e:
         print(f"Error reading live lap telemetry streams for {abbr}: {e}")
 
-    return hist_speed, hist_brake, hist_throttle, hist_rpm, hist_gear, max_lap_rows
+    return hist_speed, hist_brake, hist_throttle, hist_rpm, hist_gear, hist_gap, max_lap_rows
