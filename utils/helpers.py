@@ -183,22 +183,51 @@ def get_driver_lap_positions(db_path):
 
     return driver_lap_positions
 
-def get_driver_telemetry(db_file, abbr, current_frame, current_lap): 
+def get_tyre_data(db_path, abbr, current_lap):
+    """
+    Fetches the tire compound and tire life for a given driver and lap.
+    Returns: (compound: str, tyre_life: int)
+    """
+    compound = "N/A"
+    tyre_life = 0
+
+    if not os.path.exists(db_path):
+        return compound, tyre_life
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # Query the 'laps' table directly for compound and tyre life on the current lap
+        query = "SELECT Compound, TyreLife FROM laps WHERE Driver = ? AND LapNumber = ?"
+        cursor.execute(query, (abbr, current_lap))
+        row = cursor.fetchone()
+
+        if row:
+            compound = row[0] if row[0] is not None else "N/A"
+            tyre_life = int(row[1]) if row[1] is not None else 0
+
+        conn.close()
+    except Exception as e:
+        print(f"Error fetching tyre data for {abbr} on Lap {current_lap}: {e}")
+
+    return compound, tyre_life
+
+def get_driver_telemetry(db_path, abbr, current_frame, current_lap): 
     hist_speed = None
     hist_brake = None
     hist_throttle = None
     hist_rpm = None
-    hist_gear = None
-    hist_gap = None
+    hist_gear = None 
     max_lap_rows = 1000
 
-    if not os.path.exists(db_file):
-        return hist_speed, hist_brake, hist_throttle, hist_rpm, max_lap_rows
+    if not os.path.exists(db_path):
+        return hist_speed, hist_brake, hist_throttle, hist_rpm, hist_gear, max_lap_rows
 
     try:
         table_name = f"telemetry_{abbr.lower()}"
         
-        conn = sqlite3.connect(db_file)
+        conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
         # Get the starting global row ID for the active lap
@@ -212,7 +241,7 @@ def get_driver_telemetry(db_file, abbr, current_frame, current_lap):
             max_lap_rows = max(2, cursor.fetchone()[0])
              
             query = f"""
-                SELECT speed, brake, throttle, rpm, ngear, gap_ahead FROM {table_name} 
+                SELECT speed, brake, throttle, rpm, ngear FROM {table_name} 
                 WHERE lap_number = ? 
                 ORDER BY rowid ASC 
                 LIMIT ?
@@ -225,11 +254,10 @@ def get_driver_telemetry(db_file, abbr, current_frame, current_lap):
                 hist_brake    = np.array([r[1] for r in rows if r[1] is not None])
                 hist_throttle = np.array([r[2] for r in rows if r[2] is not None])
                 hist_rpm      = np.array([r[3] for r in rows if r[3] is not None])
-                hist_gear     = np.array([r[4] for r in rows if r[4] is not None])
-                hist_gap      = np.array([r[5] for r in rows if r[5] is not None])
+                hist_gear     = np.array([r[4] for r in rows if r[4] is not None]) 
 
         conn.close()
     except Exception as e:
         print(f"Error reading live lap telemetry streams for {abbr}: {e}")
 
-    return hist_speed, hist_brake, hist_throttle, hist_rpm, hist_gear, hist_gap, max_lap_rows
+    return hist_speed, hist_brake, hist_throttle, hist_rpm, hist_gear, max_lap_rows

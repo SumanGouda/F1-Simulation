@@ -264,8 +264,7 @@ class F1ReplayWindow(arcade.Window):
                     arcade.draw_text(
                         abbr, fx + 12, fy, arcade.color.WHITE, 10, bold=True, anchor_y="center")
  
-                draw_data_card(self, self.h2h_selected,
-                               self.db_path, SCREEN_WIDTH, SCREEN_HEIGHT)
+                draw_data_card(self, self.h2h_selected, self.db_path, SCREEN_WIDTH, SCREEN_HEIGHT)
 
             # Lap Number
             draw_lap_number(self.sorted_drivers, self.driver_metadata, int(total_laps))
