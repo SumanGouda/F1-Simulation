@@ -1,6 +1,6 @@
 import os
 import arcade
-from utils.helpers import get_driver_telemetry, get_tyre_data
+from utils.helpers import get_driver_telemetry, get_tyre_data, get_sector_times
 
 def draw_h2h_selection_panel(self):
     panel_x, panel_y = 20, 170
@@ -191,3 +191,135 @@ def draw_data_card(app, drv_list, db_path, screen_width, screen_height):
                 arcade.rect.XYWH(brake_x, v_bar_y_base + filled_b_h / 2, v_bar_w, filled_b_h), (220, 30, 30)
             )
         arcade.draw_text("B", brake_x, v_bar_y_base + v_bar_h + 6, arcade.color.RED, 9, bold=True, anchor_x="center")
+
+def draw_sector_times(app, x_cor, y_cor, drv_list, lapnumber):
+    """
+    Header row followed by driver cards.
+    First driver shows absolute sector times (white).
+    Rest show delta vs first driver (green = faster/negative, yellow = slower/positive).
+    """
+    if not drv_list:
+        return
+
+    # Fetch sector times for all drivers
+    all_times = {}
+    for drv in drv_list: 
+        s1, s2, s3 = get_sector_times(app.db_path, drv, lapnumber)
+
+        def to_f(v):
+            try: return float(v)
+            except: return None
+
+        all_times[drv] = (to_f(s1), to_f(s2), to_f(s3))
+
+    ref_s1, ref_s2, ref_s3 = all_times[drv_list[0]]
+
+    col_widths = [60, 75, 75, 75]
+    card_h = 28
+    total_w = sum(col_widths)
+    padding_y = 10
+
+    def fmt(val, ref, is_ref_driver):
+        if val is None:
+            return "N/A", arcade.color.GRAY
+        if is_ref_driver:
+            return f"{val:.3f}", arcade.color.WHITE
+        if ref is None:
+            return "N/A", arcade.color.GRAY
+        
+        delta = val - ref
+        color = arcade.color.LIGHT_GREEN if delta < 0 else arcade.color.YELLOW
+        return f"{delta:+.3f}", color
+
+    # -----------------------------------------------------------------
+    # 1. HEADER ROW ("DRV", "S1", "S2", "S3")
+    # -----------------------------------------------------------------
+    header_y = y_cor
+    header_center_y = header_y + (card_h / 2)
+
+    # Background box for header
+    arcade.draw_rect_filled(
+        arcade.rect.XYWH(x_cor + (total_w / 2), header_center_y, total_w, card_h),
+        (30, 30, 30, 240)
+    )
+
+    header_curr_x = x_cor
+    header_titles = ["DRV", "S1", "S2", "S3"]
+    for idx, (width, title) in enumerate(zip(col_widths, header_titles)):
+        cell_center_x = header_curr_x + (width / 2)
+        arcade.draw_text(
+            title, cell_center_x, header_center_y,
+            arcade.color.LIGHT_GRAY, 11, bold=True,
+            anchor_x="center", anchor_y="center"
+        )
+        if idx < 3:
+            arcade.draw_line(
+                header_curr_x + width, header_y + 2,
+                header_curr_x + width, header_y + card_h - 2,
+                (70, 70, 70), 1
+            )
+        header_curr_x += width
+
+    # -----------------------------------------------------------------
+    # 2. DRIVER CARDS (Reference + Delta Drivers)
+    # -----------------------------------------------------------------
+    for idx, drv in enumerate(drv_list):
+        s1, s2, s3 = all_times[drv]
+        is_ref_driver = (idx == 0)
+
+        # Shift driver cards down below header row
+        card_y = header_y - (idx + 1) * (card_h + padding_y)
+        center_x = x_cor + (total_w / 2)
+        center_y = card_y + (card_h / 2)
+        drv_color = app.car_colors.get(drv, arcade.color.GRAY)
+
+        # Card Background & Outline
+        arcade.draw_rect_filled(
+            arcade.rect.XYWH(center_x, center_y, total_w, card_h), (20, 20, 20, 220)
+        )
+        arcade.draw_rect_outline(
+            arcade.rect.XYWH(center_x, center_y, total_w, card_h), drv_color, border_width=2
+        )
+
+        # Format sector values (Absolute time for driver 1, Delta for driver 2+)
+        s1_text, s1_color = fmt(s1, ref_s1, is_ref_driver)
+        s2_text, s2_color = fmt(s2, ref_s2, is_ref_driver)
+        s3_text, s3_color = fmt(s3, ref_s3, is_ref_driver)
+
+        columns = [
+            (drv, drv_color, arcade.color.BLACK),
+            (s1_text, None, s1_color),
+            (s2_text, None, s2_color),
+            (s3_text, None, s3_color)
+        ]
+
+        curr_col_x = x_cor
+        for c_idx, (width, (val_text, bg_col, txt_col)) in enumerate(zip(col_widths, columns)):
+            cell_center_x = curr_col_x + (width / 2)
+
+            if c_idx == 0:
+                # Driver abbreviation badge with team color
+                arcade.draw_rect_filled(
+                    arcade.rect.XYWH(cell_center_x, center_y, width, card_h - 4), bg_col
+                )
+                arcade.draw_text(
+                    str(val_text), cell_center_x, center_y, txt_col, 11, bold=True,
+                    anchor_x="center", anchor_y="center"
+                )
+            else:
+                # Sector value / Delta time
+                arcade.draw_text(
+                    str(val_text), cell_center_x, center_y, txt_col, 11, bold=True,
+                    anchor_x="center", anchor_y="center"
+                )
+                # Vertical grid lines
+                if c_idx < 3:
+                    arcade.draw_line(
+                        curr_col_x + width, card_y + 2,
+                        curr_col_x + width, card_y + card_h - 2,
+                        (60, 60, 60), 1
+                    )
+
+            curr_col_x += width
+
+            

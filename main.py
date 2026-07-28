@@ -10,14 +10,14 @@ from UI.pos_chart_tab import draw_position_chart
 from UI.foc_tab import draw_focused_driver_telemetry
 from UI.selection_tkinter_ui import get_race_selection
 from core.telemetry_processor import TelemetryProcessor
-from UI.h2h_tab import draw_h2h_selection_panel, draw_data_card
+from UI.h2h_tab import draw_h2h_selection_panel, draw_data_card, draw_sector_times
 from UI.playback_controls import draw_playback_controls, on_slow, on_pause, on_fast
 from UI.main_window import draw_tab_bar, draw_leaderboard, draw_lap_number, draw_corners, draw_weather_card, draw_track
 
 
 
 from utils.helpers import (
-    get_max_session_rows, hex_to_rgb, get_results_from_db,
+    get_max_session_rows, hex_to_rgb, get_results_from_db, get_sector_times,
     prepare_track_layout, get_screen_coords, calculate_weather_frame_ratio,
 )
 
@@ -116,28 +116,27 @@ class F1ReplayWindow(arcade.Window):
                     padding_left=TRACK_PADDING_LEFT, rotation=self.rotation
                 )
                 self.track_scale_focused = self.track_scale * 0.30
-                self.fx = self.fx - 150        # shift track
-                self.offset_x = self.offset_x - 150  # shift corners
-                self.foc_offset_y = self.offset_y - 80   # Change to shift the track in y
+                self.fx = self.fx - 150         
+                self.offset_x = self.offset_x - 150   
+                self.foc_offset_y = self.offset_y - 80    
 
         # 5. Colors & trackers
-        self.car_colors = {abbr: hex_to_rgb(info.get('TeamColor', '#FFFFFF'))
-                           for abbr, info in self.driver_metadata.items()}
-        self.current_car_positions = {
-            abbr: (0, 0) for abbr in self.driver_metadata}
-        self.driver_row_counters = {abbr: 0 for abbr in self.driver_metadata}
-        self.driver_float_counters = {
-            abbr: 0.0 for abbr in self.driver_metadata}
+        self.car_colors             = {
+            abbr: hex_to_rgb(info.get('TeamColor', '#FFFFFF')) for abbr, info in self.driver_metadata.items()
+        }
+        self.current_car_positions  = {
+            abbr: (0, 0) for abbr in self.driver_metadata
+        }
+        self.driver_row_counters    = {abbr: 0 for abbr in self.driver_metadata}
+        self.driver_float_counters  = {abbr: 0.0 for abbr in self.driver_metadata}
 
         # 6. Timing & speed
-        self.max_rows = get_max_session_rows(
-            self.driver_metadata.keys(), self.db_path)
-        self.weather_frame_ratio = calculate_weather_frame_ratio(
-            self.driver_metadata.keys(), self.db_path)
+        self.max_rows             = get_max_session_rows(self.driver_metadata.keys(), self.db_path)
+        self.weather_frame_ratio  = max(1, calculate_weather_frame_ratio(self.driver_metadata.keys(), self.db_path))
         self.global_frame_counter = 0
-        self.weather_index = 0
-        self.race_speed = 1.5
-        self.current_weather = None
+        self.weather_index        = 0
+        self.race_speed           = 1.5
+        self.current_weather      = None
 
     # ─────────────────────────────────────────────
     #  UPDATE
@@ -147,7 +146,7 @@ class F1ReplayWindow(arcade.Window):
         if self.is_paused:
             return
 
-        if self.global_frame_counter % self.weather_frame_ratio == 0:
+        if self.weather_frame_ratio > 0 and self.global_frame_counter % self.weather_frame_ratio == 0:
             if os.path.exists(self.db_path):
                 try:
                     conn = sqlite3.connect(self.db_path)
@@ -158,8 +157,8 @@ class F1ReplayWindow(arcade.Window):
                     result = cursor.fetchone()
                     conn.close()
                     if result:
-                        self.current_weather = result
-                        self.weather_index += self.race_speed
+                        self.current_weather  = result
+                        self.weather_index   += self.race_speed
                 except Exception as e:
                     print(f"Weather Update Error: {e}")
 
@@ -170,14 +169,14 @@ class F1ReplayWindow(arcade.Window):
             for abbr in self.sorted_drivers:
                 try:
                     self.driver_float_counters[abbr] += self.race_speed
-                    row_index = int(self.driver_float_counters[abbr])
+                    row_index  = int(self.driver_float_counters[abbr])
                     table_name = f"telemetry_{abbr.lower()}"
 
-                    conn = sqlite3.connect(self.db_path)
+                    conn   = sqlite3.connect(self.db_path)
                     cursor = conn.cursor()
                     cursor.execute(f"""
                         SELECT x, y, total_distance, gap_ahead, speed, rpm, ngear,
-                               throttle, brake, drs, lap_number
+                            throttle, brake, drs, lap_number
                         FROM {table_name} LIMIT 1 OFFSET ?
                     """, (row_index,))
                     result = cursor.fetchone()
@@ -189,10 +188,10 @@ class F1ReplayWindow(arcade.Window):
                             self.current_car_positions[abbr] = (x, y)
                         self.driver_metadata[abbr].update({
                             'total_distance': dist,
-                            'gap_ahead':  gap if gap is not None else 0.0,
-                            'speed': speed, 'rpm': rpm, 'gear': gear,
+                            'gap_ahead':      gap if gap is not None else 0.0,
+                            'speed':    speed,  'rpm':  rpm,   'gear': gear,
                             'throttle': throttle, 'brake': brake,
-                            'drs': drs, 'lap_number': lap
+                            'drs':      drs,    'lap_number': lap
                         })
                         if dist is not None and pd.notna(dist):
                             race_positions.append((abbr, dist))
@@ -217,17 +216,16 @@ class F1ReplayWindow(arcade.Window):
             self.screen_title, SCREEN_WIDTH / 2, SCREEN_HEIGHT - 20, arcade.color.RED,
             font_size=27, anchor_x="center", anchor_y="center"
         )
+
         # HUD
         try:
-            total_laps = max(int(meta.get('Laps', 0) or 0)
-                             for meta in self.driver_metadata.values())
+            total_laps = max(int(meta.get('Laps', 0) or 0) for meta in self.driver_metadata.values())
         except (ValueError, TypeError):
             total_laps = 0
 
         # Leader Lap
         try:
-            leader_lap = self.driver_metadata.get(
-                self.sorted_drivers[0], {}).get('lap_number', 0)
+            leader_lap = self.driver_metadata.get(self.sorted_drivers[0], {}).get('lap_number', 0)
         except Exception as e:
             leader_lap = 0
             print(f"Leader lap error: {e}")
@@ -238,49 +236,64 @@ class F1ReplayWindow(arcade.Window):
         # Lap Chart Page
         if self.show_lap_chart:
             draw_position_chart(
-                self.db_path, total_laps, len(
-                    self.sorted_drivers), 120, 150, SCREEN_WIDTH - 280, SCREEN_HEIGHT - 320,
-                self.car_colors, getattr(self, 'retired_icon',  None), getattr(
-                    self, 'finished_icon', None)
+                self.db_path, total_laps, len(self.sorted_drivers), 120, 150,
+                SCREEN_WIDTH - 280, SCREEN_HEIGHT - 320,
+                self.car_colors,
+                getattr(self, 'retired_icon', None),
+                getattr(self, 'finished_icon', None)
             )
 
         # H2H Comparison Page
         elif self.h2h_comparison:
-            draw_h2h_selection_panel(self)
-            draw_track(self.fx, self.fy, self.sorted_drivers,
-                       leader_lap, self.db_path)
+            draw_track(self.fx, self.fy, self.sorted_drivers, leader_lap, self.db_path)
 
-            if self.h2h_confirmed:
+            # Corners in H2H tab
+            if self.corner_data:
+                try:
+                    draw_corners(self.corner_data, self.rotation, self.track_scale, self.offset_x, self.offset_y)
+                except Exception as e:
+                    print(f"H2H Corner draw error: {e}")
+
+            draw_h2h_selection_panel(self)
+
+            if self.h2h_confirmed and self.h2h_selected:
                 # Cars
                 for abbr in self.h2h_selected:
                     pos = self.current_car_positions.get(abbr)
                     if not pos or pos == (0, 0):
                         continue
                     fx, fy = get_screen_coords(
-                        pos[0], pos[1], self.rotation, self.track_scale, self.offset_x, self.offset_y)
+                        pos[0], pos[1], self.rotation, self.track_scale, self.offset_x, self.offset_y
+                    )
                     color = self.car_colors.get(abbr, arcade.color.GRAY)
-
                     arcade.draw_circle_filled(fx, fy, 5, color)
-                    arcade.draw_text(
-                        abbr, fx + 12, fy, arcade.color.WHITE, 10, bold=True, anchor_y="center")
- 
+                    arcade.draw_text(abbr, fx + 12, fy, arcade.color.WHITE, 10, bold=True, anchor_y="center")
+
+                # Bottom Telemetry Cards
                 draw_data_card(self, self.h2h_selected, self.db_path, SCREEN_WIDTH, SCREEN_HEIGHT)
 
-            # Lap Number
-            draw_lap_number(self.sorted_drivers, self.driver_metadata, int(total_laps))
+                # Sector Times Stack (top-right)
+                card_w  = 285
+                card_h  = 28
+                start_x = SCREEN_WIDTH - card_w - 20
+                start_y = SCREEN_HEIGHT - 30 - card_h
+
+                draw_sector_times(self, start_x, start_y, self.h2h_selected, leader_lap)
+                draw_lap_number(self.h2h_selected, self.driver_metadata, int(total_laps))
+
+            else:
+                draw_lap_number(self.sorted_drivers, self.driver_metadata, int(total_laps))
 
         # Main Page
         else:
             if self.selected_driver is None:
                 # Tab bar
-                tabs = ["Lap Chart", "(H2H) Comparison",
-                        "TELEMETRY", "WEATHER"]
+                tabs = ["Lap Chart", "(H2H) Comparison", "WORK IN PROGRESS", "WORK IN PROGRESS"]
                 tab_w, tab_h = 160, 35
-                pad = 12
-                total_width = (len(tabs) * tab_w) + ((len(tabs) - 1) * pad)
-                start_x = (SCREEN_WIDTH / 2) - (total_width / 2)
-                self.tab_hitboxes = draw_tab_bar(
-                    start_x, 120, pad, tabs, tab_w, tab_h)
+                pad          = 12
+                total_width  = (len(tabs) * tab_w) + ((len(tabs) - 1) * pad)
+                start_x      = (SCREEN_WIDTH / 2) - (total_width / 2)
+                self.tab_hitboxes = draw_tab_bar(start_x, 120, pad, tabs, tab_w, tab_h)
 
                 # Lap Number
                 draw_lap_number(self.sorted_drivers, self.driver_metadata, int(total_laps))
@@ -298,21 +311,19 @@ class F1ReplayWindow(arcade.Window):
                 # Cars
                 for abbr in self.sorted_drivers:
                     pos = self.current_car_positions.get(abbr)
-
                     if not pos or pos == (0, 0):
                         continue
-
                     fx, fy = get_screen_coords(
                         pos[0], pos[1], self.rotation, self.track_scale, self.offset_x, self.offset_y)
                     color = self.car_colors.get(abbr, arcade.color.GRAY)
                     arcade.draw_circle_filled(fx, fy, 5, color)
-                    arcade.draw_text(
-                        abbr, fx + 12, fy, arcade.color.WHITE, 10, bold=True, anchor_y="center")
+                    arcade.draw_text(abbr, fx + 12, fy, arcade.color.WHITE, 10, bold=True, anchor_y="center")
 
                 # Leaderboard
                 self.leaderboard_hitboxes = draw_leaderboard(
                     self.sorted_drivers, self.driver_metadata, self.car_colors, self.height
                 )
+
                 # Weather Card
                 if self.current_weather is not None:
                     draw_weather_card(self.current_weather, self.width, self.height)
@@ -323,7 +334,7 @@ class F1ReplayWindow(arcade.Window):
 
                 if self.current_weather is not None:
                     draw_weather_card(self.current_weather, self.width, self.height)
-
+                    
     # ─────────────────────────────────────────────
     #  INPUT
     # ─────────────────────────────────────────────
@@ -354,28 +365,28 @@ class F1ReplayWindow(arcade.Window):
                 box = self.h2h_compare_btn
                 if box["left"] <= x <= box["right"] and box["bottom"] <= y <= box["top"]:
                     self.h2h_confirmed = True
+                    # Fix order once at confirmation time, not every frame
+                    self.h2h_selected = [drv for drv in self.sorted_drivers if drv in self.h2h_selected]
                     return
 
             # Driver selection rows
             for abbr, box in self.h2h_panel_hitboxes.items():
                 if box["left"] <= x <= box["right"] and box["bottom"] <= y <= box["top"]:
                     if abbr in self.h2h_selected:
-                        self.h2h_selected.remove(abbr)   # deselect
+                        self.h2h_selected.remove(abbr)
                     elif len(self.h2h_selected) < 3:
-                        self.h2h_selected.append(abbr)   # select
+                        self.h2h_selected.append(abbr)
                     return
 
             if self.h2h_panel_hitboxes:
-                sample_box = next(iter(self.h2h_panel_hitboxes.values()))
-                panel_left = sample_box["left"]
+                sample_box  = next(iter(self.h2h_panel_hitboxes.values()))
+                panel_left  = sample_box["left"]
                 panel_right = sample_box["right"]
-
                 if x < panel_left or x > panel_right:
                     self.h2h_comparison = False
-                    self.h2h_confirmed = False
-                    self.h2h_selected = []
+                    self.h2h_confirmed  = False
+                    self.h2h_selected   = []
                     return
-
             return
 
         # Tab bar
